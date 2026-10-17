@@ -84,6 +84,7 @@
     <button data-key="4" aria-label="ghost 4">4</button>
     <button data-key="r" aria-label="restart">R</button>
     <button data-key="t" aria-label="autotests">T</button>
+    <button data-key="m" aria-label="sound on/off">M</button>
   </div>
 </div>
 <script>
@@ -216,9 +217,10 @@
   //  (the page is opened as file:// instead of from a web server), the
   //  built-in copies below are used and a note appears at the bottom.
   // =====================================================================
-  const CONFIG_FILES = { speeds: 'pacman-speeds.yaml', fsm: 'ghost-fsm.yaml' };
+  const CONFIG_FILES = { speeds: 'pacman-speeds.yaml', fsm: 'ghost-fsm.yaml', sounds: 'sounds.yaml' };
   const BUILTIN_SPEEDS_YAML = "# Pac-Man speed table\n#\n# The game reads this file when it starts and again on every restart (R key),\n# so edits take effect without reloading the page.\n#\n# All speeds are percentages. 100 % equals `px_per_frame_at_100` pixels per frame\n# at 60 frames per second. The arcade's 100 % is 75.758 px/s = 1.2626 px/frame.\n#\n# `active` selects the profile the game uses.\n\nactive: current\n\nprofiles:\n\n  # The speeds this clone has used so far (ghost / Pac-Man = 93 %, everything ~19 % slower than the arcade).\n  current:\n    px_per_frame_at_100: 1.0\n    pacman:\n      normal: 82                 # 0.82 px/frame\n      frightened: 92             # while the ghosts are blue\n      dot_pause_frames: 1        # Pac-Man stops for 1 frame on every dot\n      energizer_pause_frames: 3  # and for 3 frames on an energizer\n    ghost:\n      normal: 76\n      tunnel: 51.7               # inside the side tunnels\n      frightened: 46\n      frightened_tunnel: 34\n      eyes: 145                  # DEAD: eyes running back to the house\n      house: 50                  # bobbing in the house and walking out\n    blinky:\n      normal: 79\n      elroy1: { dots_left: 20, speed: 84 }   # \"Cruise Elroy\": Blinky speeds up near the end of the level\n      elroy2: { dots_left: 10, speed: 90 }\n\n  # The original arcade, level 1 (the commonly documented table).\n  arcade_level1:\n    px_per_frame_at_100: 1.2626\n    pacman:\n      normal: 80\n      frightened: 90\n      dot_pause_frames: 1\n      energizer_pause_frames: 3\n    ghost:\n      normal: 75\n      tunnel: 40\n      frightened: 50\n      frightened_tunnel: 40      # the tunnel limit applies to blue ghosts too\n      eyes: 150                  # not in the published table; estimate\n      house: 40                  # not in the published table; estimate\n    blinky:\n      normal: 75                 # same as the others until Elroy kicks in\n      elroy1: { dots_left: 20, speed: 80 }\n      elroy2: { dots_left: 10, speed: 85 }\n";
-  const BUILTIN_FSM_YAML = "# Ghost state machine (FSM)\n#\n# The game reads this file when it starts and again on every restart (R key).\n#\n#   HOME     waiting in the ghost house, or walking out of it\n#   SCATTER  heading for its own corner\n#   CHASE    hunting Pac-Man, each ghost with its own targeting rule\n#   EVADE    frightened (blue), turns at random, can be eaten\n#   DEAD     eyes running back to the house\n\nstates:\n  HOME:    { color: \"#9aa0b8\", speed: house,      target: none }\n  SCATTER: { color: \"#7ddc4c\", speed: normal,     target: scatter_corner }\n  CHASE:   { color: \"#ff5050\", speed: normal,     target: chase }\n  EVADE:   { color: \"#4f7bff\", speed: frightened, target: random }\n  DEAD:    { color: \"#ffffff\", speed: eyes,       target: house_door }\n\n# Global scatter/chase timer (level 1). In transitions, `to: mode` means\n# whichever of SCATTER / CHASE this timer is in right now.\n# The timer pauses while the ghosts are frightened.\nmode_schedule:\n  - { mode: SCATTER, seconds: 7 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 7 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 5 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 5 }\n  - { mode: CHASE,   seconds: forever }\n\n# How long the ghosts stay blue after Pac-Man eats an energizer.\nfright_seconds: 6\n\n# Per ghost:\n#   start           starting state (HOME = in the ghost house)\n#   release_dots    how many eaten dots let it out of the house\n#   scatter_corner  its corner in SCATTER (tile x, tile y; may lie outside the maze)\n#   chase           how it aims at Pac-Man in CHASE:\n#     rule: pacman   Pac-Man's own tile\n#     rule: ahead    `tiles` tiles in front of Pac-Man\n#     rule: vector   take the point `tiles` in front of Pac-Man, then double the\n#                    vector from the `partner` ghost to that point\n#     rule: shy      Pac-Man's tile while farther than `radius` tiles, else its scatter corner\n#     up_quirk: true copies the arcade bug: when Pac-Man faces up, the \"in front of\"\n#                    point is also shifted the same number of tiles to the left\nghosts:\n  blinky:\n    start: SCATTER\n    release_dots: 0\n    scatter_corner: [25, 0]\n    chase: { rule: pacman }\n  pinky:\n    start: HOME\n    release_dots: 0\n    scatter_corner: [2, 0]\n    chase: { rule: ahead, tiles: 4, up_quirk: true }\n  inky:\n    start: HOME\n    release_dots: 12\n    scatter_corner: [27, 35]\n    chase: { rule: vector, tiles: 2, partner: blinky, up_quirk: true }\n  clyde:\n    start: HOME\n    release_dots: 32\n    scatter_corner: [0, 35]\n    chase: { rule: shy, radius: 8 }\n\n# Events raised by the game:\n#   released      the dot counter lets the ghost out of the house\n#   mode_change   the scatter/chase timer switches\n#   energizer     Pac-Man eats an energizer\n#   fright_end    the blue time is over\n#   touch         Pac-Man and the ghost are on the same spot\n#   arrived_home  DEAD eyes reached their place in the house\n#\n# Options:\n#   reverse: true      the ghost turns around\n#   frightened: true   blue look without changing state (ghosts waiting at home)\n#   action:            score_ghost (Pac-Man eats it) / kill_pacman (Pac-Man loses a life)\n# The first matching line wins. Events with no matching line are ignored.\ntransitions:\n  - { event: released,     from: HOME,             to: mode }\n  - { event: mode_change,  from: [SCATTER, CHASE], to: mode,  reverse: true }\n  - { event: energizer,    from: [SCATTER, CHASE], to: EVADE, reverse: true }\n  - { event: energizer,    from: HOME,             to: HOME,  frightened: true }\n  - { event: fright_end,   from: EVADE,            to: mode }\n  - { event: fright_end,   from: HOME,             to: HOME,  frightened: false }\n  - { event: touch,        from: EVADE,            to: DEAD,  action: score_ghost }\n  - { event: touch,        from: [SCATTER, CHASE], action: kill_pacman }\n  - { event: arrived_home, from: DEAD,             to: HOME }\n\n# Manual mode (key 0): keys 1-4 move ghost 1-4 to the next state in this list.\nmanual_cycle: [HOME, SCATTER, CHASE, EVADE, DEAD]\n";
+  const BUILTIN_FSM_YAML = "# Ghost state machine (FSM)\n#\n# The game reads this file when it starts and again on every restart (R key).\n#\n#   HOME     waiting in the ghost house, or walking out of it\n#   SCATTER  heading for its own corner\n#   CHASE    hunting Pac-Man, each ghost with its own targeting rule\n#   EVADE    frightened (blue), turns at random, can be eaten\n#   DEAD     eyes running back to the house\n\nstates:\n  HOME:    { color: \"#9aa0b8\", speed: house,      target: none }\n  SCATTER: { color: \"#7ddc4c\", speed: normal,     target: scatter_corner }\n  CHASE:   { color: \"#ff5050\", speed: normal,     target: chase }\n  EVADE:   { color: \"#4f7bff\", speed: frightened, target: random }\n  DEAD:    { color: \"#ffffff\", speed: eyes,       target: house_door }\n\n# Global scatter/chase timer (level 1). In transitions, `to: mode` means\n# whichever of SCATTER / CHASE this timer is in right now.\n# The timer pauses while the ghosts are frightened.\nmode_schedule:\n  - { mode: SCATTER, seconds: 7 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 7 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 5 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 5 }\n  - { mode: CHASE,   seconds: forever }\n\n# How long the ghosts stay blue after Pac-Man eats an energizer.\nfright_seconds: 6\n\n# Per ghost:\n#   start           starting state (HOME = in the ghost house)\n#   release_dots    how many eaten dots let it out of the house\n#   scatter_corner  its corner in SCATTER (tile x, tile y; may lie outside the maze)\n#   chase           how it aims at Pac-Man in CHASE:\n#     rule: pacman   Pac-Man's own tile\n#     rule: ahead    `tiles` tiles in front of Pac-Man\n#     rule: vector   take the point `tiles` in front of Pac-Man, then double the\n#                    vector from the `partner` ghost to that point\n#     rule: shy      Pac-Man's tile while farther than `radius` tiles, else its scatter corner\n#     up_quirk: true copies the arcade bug: when Pac-Man faces up, the \"in front of\"\n#                    point is also shifted the same number of tiles to the left\nghosts:\n  blinky:\n    start: SCATTER\n    release_dots: 0\n    scatter_corner: [25, 0]\n    chase: { rule: pacman }\n  pinky:\n    start: HOME\n    release_dots: 0\n    scatter_corner: [2, 0]\n    chase: { rule: ahead, tiles: 4, up_quirk: true }\n  inky:\n    start: HOME\n    release_dots: 12\n    scatter_corner: [27, 35]\n    chase: { rule: vector, tiles: 2, partner: blinky, up_quirk: true }\n  clyde:\n    start: HOME\n    release_dots: 32\n    scatter_corner: [0, 35]\n    chase: { rule: shy, radius: 8 }\n\n# Events raised by the game:\n#   released      the dot counter lets the ghost out of the house\n#   mode_change   the scatter/chase timer switches\n#   energizer     Pac-Man eats an energizer\n#   fright_end    the blue time is over\n#   touch         Pac-Man and the ghost are on the same spot\n#   arrived_home  DEAD eyes reached their place in the house\n#\n# Options:\n#   reverse: true      the ghost turns around\n#   frightened: true   blue look without changing state (ghosts waiting at home)\n#   action:            score_ghost (Pac-Man eats it) / kill_pacman (Pac-Man loses a life)\n#   sound:             a sound from sounds.yaml to play when the transition happens\n# The first matching line wins. Events with no matching line are ignored.\ntransitions:\n  - { event: released,     from: HOME,             to: mode }\n  - { event: mode_change,  from: [SCATTER, CHASE], to: mode,  reverse: true }\n  - { event: energizer,    from: [SCATTER, CHASE], to: EVADE, reverse: true }\n  - { event: energizer,    from: HOME,             to: HOME,  frightened: true }\n  - { event: fright_end,   from: EVADE,            to: mode }\n  - { event: fright_end,   from: HOME,             to: HOME,  frightened: false }\n  - { event: touch,        from: EVADE,            to: DEAD,  action: score_ghost, sound: eat_ghost }\n  - { event: touch,        from: [SCATTER, CHASE], action: kill_pacman, sound: death }\n  - { event: arrived_home, from: DEAD,             to: HOME }\n\n# Manual mode (key 0): keys 1-4 move ghost 1-4 to the next state in this list.\nmanual_cycle: [HOME, SCATTER, CHASE, EVADE, DEAD]\n";
+  const BUILTIN_SOUNDS_YAML = "# Sound files used by the game\n#\n# Paths are relative to pacman.html. To use another sound, put the file next to\n# pacman.html (e.g. into mysounds/) and change `file:` below.\n# WAV, MP3 and OGG all work. A missing or unreadable file is simply skipped:\n# the game keeps running without that sound.\n#\n# The generated arcade-style set (gen_sounds.py) is in sounds/; its list is in\n# sounds_generated.yaml. To switch back, copy the file names from there.\n#\n#   loop: true   the sound repeats while its situation lasts (background sounds)\n#   when         where the game plays it (for reading only)\n\nenabled: true\nvolume: 0.6          # 0 .. 1, M key toggles sound on/off\n\nsounds:\n  start:     { file: mysounds/pacstart.wav,        when: \"new game, during READY!\" }\n  chomp_a:   { file: mysounds/pacdot1.wav,         when: \"Pac-Man eats a dot or energizer (1st, 3rd, 5th ...)\" }\n  chomp_b:   { file: mysounds/pacdot2.wav,         when: \"Pac-Man eats a dot or energizer (2nd, 4th, 6th ...)\" }\n  siren_1:   { file: mysounds/pacghost1.wav,       loop: true, when: \"background, 181 or more pellets left\" }\n  siren_2:   { file: mysounds/pacghost2.wav,       loop: true, when: \"background, 121-180 pellets left\" }\n  siren_3:   { file: mysounds/pacghost3.wav,       loop: true, when: \"background, 61-120 pellets left\" }\n  siren_4:   { file: mysounds/pacghost4.wav,       loop: true, when: \"background, 60 or fewer pellets left\" }\n  fright:    { file: mysounds/pacghostblue.wav,    loop: true, when: \"background while the ghosts are blue (EVADE)\" }\n  eyes:      { file: mysounds/pacghostretreat.wav, loop: true, when: \"background while DEAD eyes run home\" }\n  eat_ghost: { file: mysounds/pacghosteat.wav,     when: \"Pac-Man eats a ghost (FSM: touch EVADE -> DEAD)\" }\n  eat_fruit: { file: mysounds/pacfruit.wav,        when: \"Pac-Man eats the fruit\" }\n  death:     { file: mysounds/pacdie1.wav,         when: \"a ghost catches Pac-Man (FSM: touch -> kill_pacman)\" }\n  cutscene:  { file: mysounds/paccutscene.wav,     when: \"intermission after each level, played twice (there and back)\" }\n\n# In mysounds/ but not used by the game yet (no matching event so far):\n#   paccoin.wav        coin inserted\n#   pacextralife.wav   extra life\n#   pacdie2.wav        short death sound (alternative to pacdie1.wav)\n\n# Background siren: which siren plays at how many pellets left.\n# Any number of levels; the first one whose limit is reached wins (checked from the highest).\nsiren_levels:\n  siren_1: 181\n  siren_2: 121\n  siren_3: 61\n  siren_4: 0\n";
   let CFG = null;              // { profileName, sp, unit, fsm }
   let configSource = '';       // 'yaml' or 'built-in'
 
@@ -335,7 +337,7 @@
     return doc;
   }
 
-  function applyConfig(speedsDoc, fsmDoc) {
+  function applyConfig(speedsDoc, fsmDoc, soundsDoc) {
     const fail = (m) => { throw new Error(m); };
     if (!speedsDoc || !speedsDoc.profiles) fail('pacman-speeds.yaml: "profiles" missing');
     const sp = speedsDoc.profiles[speedsDoc.active];
@@ -359,7 +361,14 @@
       for (const f of froms) if (!fsmDoc.states[f]) fail('ghost-fsm.yaml: unknown state "' + f + '" in transition ' + tr.event);
       if (tr.to != null && tr.to !== 'mode' && !fsmDoc.states[tr.to]) fail('ghost-fsm.yaml: unknown target state "' + tr.to + '"');
     }
-    CFG = { profileName: speedsDoc.active, sp, unit: sp.px_per_frame_at_100 / 100, fsm: fsmDoc };
+    if (!soundsDoc || !soundsDoc.sounds) fail('sounds.yaml: "sounds" missing');
+    for (const [n, s] of Object.entries(soundsDoc.sounds)) if (!s || typeof s.file !== 'string') fail('sounds.yaml: ' + n + '.file missing');
+    for (const [n, min] of Object.entries(soundsDoc.siren_levels || {})) {
+      if (!soundsDoc.sounds[n]) fail('sounds.yaml: siren level "' + n + '" has no entry under sounds');
+      if (typeof min !== 'number') fail('sounds.yaml: siren_levels.' + n + ' must be a number');
+    }
+    for (const tr of fsmDoc.transitions) if (tr.sound != null && !soundsDoc.sounds[tr.sound]) fail('ghost-fsm.yaml: unknown sound "' + tr.sound + '" (not in sounds.yaml)');
+    CFG = { profileName: speedsDoc.active, sp, unit: sp.px_per_frame_at_100 / 100, fsm: fsmDoc, sounds: soundsDoc };
     MODE_SCHEDULE = fsmDoc.mode_schedule.map(m => ({
       mode: String(m.mode).toLowerCase(),
       seconds: m.seconds === 'forever' ? Infinity : Number(m.seconds)
@@ -373,15 +382,140 @@
   async function loadConfig() {
     try {
       const get = async (f) => { const r = await fetch(f, { cache: 'no-store' }); if (!r.ok) throw new Error(f + ': HTTP ' + r.status); return r.text(); };
-      const [a, b] = await Promise.all([get(CONFIG_FILES.speeds), get(CONFIG_FILES.fsm)]);
-      applyConfig(parseYAML(a), parseYAML(b));
+      const [a, b, c] = await Promise.all([get(CONFIG_FILES.speeds), get(CONFIG_FILES.fsm), get(CONFIG_FILES.sounds)]);
+      applyConfig(parseYAML(a), parseYAML(b), parseYAML(c));
       configSource = 'yaml';
       console.log('Config loaded from YAML files, speed profile "' + CFG.profileName + '"');
     } catch (e) {
       console.warn('YAML config not used (' + e.message + '). Using the built-in copy.');
-      applyConfig(parseYAML(BUILTIN_SPEEDS_YAML), parseYAML(BUILTIN_FSM_YAML));
+      applyConfig(parseYAML(BUILTIN_SPEEDS_YAML), parseYAML(BUILTIN_FSM_YAML), parseYAML(BUILTIN_SOUNDS_YAML));
       configSource = 'built-in';
     }
+    initSounds(CFG.sounds);
+  }
+
+  // =====================================================================
+  //  SOUND — the files listed in sounds.yaml
+  //  Played with Web Audio when the files can be fetched (gapless loops),
+  //  otherwise with <audio> elements (works when the page is opened as a file).
+  //  Browsers only allow sound after the first key press or tap.
+  // =====================================================================
+  const SOUNDS = {};            // name -> { file, loop, raw, buffer, el, failed }
+  const SOUND_CACHE = {};       // file -> the same objects, kept across config reloads
+  let audioCtx = null, audioGain = null, audioUnlocked = false;
+  let soundOn = true, soundVolume = 0.6;
+  let soundTestLog = null;      // autotests: sounds are recorded here instead of played
+  let currentLoop = null, loopPlaying = false, loopNode = null, loopEl = null;
+  let chompFlip = false, pendingStartSound = false;
+
+  function initSounds(doc) {
+    stopLoop();
+    for (const k of Object.keys(SOUNDS)) delete SOUNDS[k];
+    soundOn = doc.enabled !== false;
+    soundVolume = typeof doc.volume === 'number' ? doc.volume : 0.6;
+    if (audioGain) audioGain.gain.value = soundVolume;
+    for (const [name, s] of Object.entries(doc.sounds)) {
+      // files already loaded (e.g. before an R restart) are reused
+      let snd = SOUND_CACHE[s.file];
+      if (snd) {
+        snd.name = name; snd.loop = !!s.loop;
+        if (snd.el) { snd.el.loop = snd.loop; snd.el.volume = soundVolume; }
+        SOUNDS[name] = snd;
+        continue;
+      }
+      snd = { name, file: s.file, loop: !!s.loop, raw: null, buffer: null, el: null, failed: false };
+      SOUND_CACHE[s.file] = snd;
+      SOUNDS[name] = snd;
+      const el = new Audio();
+      el.preload = 'auto';
+      el.loop = snd.loop;
+      el.volume = soundVolume;
+      el.addEventListener('error', () => { snd.failed = true; });
+      el.src = s.file;
+      snd.el = el;
+      fetch(s.file).then(r => r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status)))
+        .then(buf => { snd.raw = buf; decodeSound(snd); })
+        .catch(() => { /* file:// or missing: the <audio> element is used */ });
+    }
+  }
+  function decodeSound(snd) {
+    if (!audioCtx || !snd.raw || snd.buffer) return;
+    const raw = snd.raw; snd.raw = null;
+    audioCtx.decodeAudioData(raw).then(b => { snd.buffer = b; }).catch(() => {});
+  }
+  function unlockAudio() {
+    if (audioUnlocked) return;
+    audioUnlocked = true;
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioGain = audioCtx.createGain();
+      audioGain.gain.value = soundVolume;
+      audioGain.connect(audioCtx.destination);
+      for (const s of Object.values(SOUNDS)) decodeSound(s);
+    } catch (e) { audioCtx = null; }
+    if (pendingStartSound && readyTimer > 0) {
+      playSound('start');
+      readyTimer = Math.max(readyTimer, soundDuration('start'));
+    }
+    pendingStartSound = false;
+  }
+  function playSound(name) {
+    if (soundTestLog) { soundTestLog.push(name); return; }
+    const s = SOUNDS[name];
+    if (!s || !soundOn) return;
+    if (!audioUnlocked) { if (name === 'start') pendingStartSound = true; return; }
+    if (audioCtx && s.buffer) {
+      const src = audioCtx.createBufferSource();
+      src.buffer = s.buffer; src.connect(audioGain); src.start();
+    } else if (s.el && !s.failed) {
+      s.el.volume = soundVolume; s.el.currentTime = 0; s.el.play().catch(() => {});
+    }
+  }
+  function soundDuration(name) {
+    const s = SOUNDS[name];
+    if (!s) return 0;
+    if (s.buffer) return s.buffer.duration;
+    return s.el && isFinite(s.el.duration) ? s.el.duration : 0;
+  }
+  function stopLoop() {
+    if (loopNode) { try { loopNode.stop(); } catch (e) {} loopNode = null; }
+    if (loopEl) { loopEl.pause(); loopEl = null; }
+    loopPlaying = false;
+  }
+  function setLoop(name) {
+    if (soundTestLog) { currentLoop = name; return; }
+    if (name === currentLoop && (loopPlaying || !name)) return;
+    stopLoop();
+    currentLoop = name;
+    const s = name && SOUNDS[name];
+    if (!s || !soundOn || !audioUnlocked) return;
+    if (audioCtx && s.buffer) {
+      loopNode = audioCtx.createBufferSource();
+      loopNode.buffer = s.buffer; loopNode.loop = true; loopNode.connect(audioGain); loopNode.start();
+      loopPlaying = true;
+    } else if (s.el && !s.failed) {
+      loopEl = s.el; loopEl.loop = true; loopEl.volume = soundVolume; loopEl.currentTime = 0;
+      loopEl.play().catch(() => {});
+      loopPlaying = true;
+    }
+  }
+  // which background sound fits the game right now
+  function desiredLoop() {
+    if (!soundOn || testReport || readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || cutscene || gameOver) return null;
+    if (ghosts.some(g => g.state === 'eyes')) return 'eyes';
+    if (frightenedTimer > 0 && ghosts.some(g => g.state === 'frightened')) return 'fright';
+    return sirenFor(pelletsLeft);
+  }
+  // siren by pellets left (sounds.yaml: siren_levels, any number of levels)
+  function sirenFor(left) {
+    const lv = Object.entries(CFG.sounds.siren_levels || { siren_1: 151, siren_2: 51, siren_3: 0 })
+      .sort((a, b) => b[1] - a[1]);
+    for (const [name, min] of lv) if (left >= min) return name;
+    return lv.length ? lv[lv.length - 1][0] : null;
+  }
+  function toggleSound() {
+    soundOn = !soundOn;
+    if (!soundOn) { stopLoop(); currentLoop = null; }
   }
 
   // ---------- FSM ----------
@@ -416,6 +550,7 @@
       if (tr.frightened === true && g.state === 'normal') g.state = 'frightened';
       if (tr.frightened === false && g.state === 'frightened') g.state = 'normal';
       if (tr.reverse && g.dir !== DIR.none) g.dir = reverse(g.dir);
+      if (tr.sound) playSound(tr.sound);
       return tr;
     }
     return null;
@@ -454,6 +589,8 @@
   let gameOver = false;
   let levelClearTimer = 0;
   let flashTimer = 0;
+  let cutscene = null;        // intermission after a level: { t, half }
+  let eatenFruits = [];       // fruit kinds Pac-Man has eaten, oldest first (shown bottom right)
   let fruit = null;
   let fruitAward = null;
   let fruitSpawned7 = false;
@@ -583,8 +720,19 @@
     if (score > highScore) highScore = score;
   }
 
+  // Arcade bonus fruit per level: cherry, strawberry, 2x orange, 2x apple, 2x melon,
+  // 2x Galaxian, 2x bell, then the key forever.
+  const FRUITS = {
+    cherry: 100, strawberry: 300, orange: 500, apple: 700,
+    melon: 1000, galaxian: 2000, bell: 3000, key: 5000
+  };
+  const FRUIT_BY_LEVEL = ['cherry', 'strawberry', 'orange', 'orange', 'apple', 'apple',
+    'melon', 'melon', 'galaxian', 'galaxian', 'bell', 'bell'];
+  function fruitForLevel(lv) {
+    return FRUIT_BY_LEVEL[lv - 1] || 'key';
+  }
   function fruitScoreForLevel() {
-    return 100;
+    return FRUITS[fruitForLevel(level)];
   }
 
   function frightenedSecondsForLevel() {
@@ -651,6 +799,7 @@
     flashTimer = 0;
     fruit = null;
     fruitAward = null;
+    cutscene = null;
     if (resetMode) {
       modeIndex = 0;
       modeTimer = 0;
@@ -662,6 +811,7 @@
     score = 0;
     lives = 3;
     level = 1;
+    eatenFruits = [];
     gameOver = false;
     copyMaze();
     recountPellets();
@@ -669,6 +819,11 @@
     fruitSpawned7 = false;
     fruitSpawned17 = false;
     resetRound(true);
+    chompFlip = false;
+    playSound('start');
+    // like the arcade: on a new game READY! lasts until the start jingle is over
+    const jingle = soundDuration('start');
+    if (jingle > readyTimer) readyTimer = jingle;
   }
 
   function startLevel() {
@@ -685,10 +840,34 @@
     startLevel();
   }
 
+  // Intermission after every level, as in the arcade's first cutscene:
+  // 1st half: Blinky chases Pac-Man off to the left;
+  // 2nd half: a giant Pac-Man chases the blue Blinky back to the right.
+  // Each half lasts as long as the "cutscene" sound (played once per half).
+  const CUTSCENE_HALF_DEFAULT = 5.2;
+  function cutsceneHalf() {
+    return soundDuration('cutscene') || CUTSCENE_HALF_DEFAULT;
+  }
+  function startCutscene() {
+    cutscene = { t: 0, half: cutsceneHalf(), second: false };
+    playSound('cutscene');
+  }
+  function updateCutscene(dt) {
+    cutscene.t += dt;
+    if (!cutscene.second && cutscene.t >= cutscene.half) {
+      cutscene.second = true;
+      playSound('cutscene');
+    }
+    if (cutscene.t >= cutscene.half * 2) {
+      cutscene = null;
+      startNextLevel();
+    }
+  }
+
   function spawnFruit() {
     if (fruit) return;
     const p = pixelCenter(13, 19);
-    fruit = { x: p.x, y: p.y, timer: 9 };
+    fruit = { x: p.x, y: p.y, timer: 9, kind: fruitForLevel(level) };
   }
 
   function maybeSpawnFruit() {
@@ -721,7 +900,7 @@
 
   function updateMode(dt) {
     if (manualMode) return;
-    if (readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || frightenedTimer > 0 || eatPauseTimer > 0 || gameOver) return;
+    if (readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || cutscene || frightenedTimer > 0 || eatPauseTimer > 0 || gameOver) return;
     modeTimer += dt;
     const slot = MODE_SCHEDULE[modeIndex];
     if (modeTimer >= slot.seconds) {
@@ -780,6 +959,7 @@
       pelletsLeft--;
       pelletCounter++;
       addScore(10);
+      playSound(chompFlip ? 'chomp_b' : 'chomp_a'); chompFlip = !chompFlip;
       pacman.pauseFrames = CFG.sp.pacman.dot_pause_frames;
       releaseGhostsFromDots();
       maybeSpawnFruit();
@@ -788,6 +968,7 @@
       pelletsLeft--;
       pelletCounter++;
       addScore(50);
+      playSound(chompFlip ? 'chomp_b' : 'chomp_a'); chompFlip = !chompFlip;
       pacman.pauseFrames = CFG.sp.pacman.energizer_pause_frames;
       releaseGhostsFromDots();
       maybeSpawnFruit();
@@ -800,7 +981,7 @@
   }
 
   function updatePacman() {
-    if (readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || gameOver) return;
+    if (readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || cutscene || gameOver) return;
     if (pacman.freezeTimer > 0) return;
     if (pacman.pauseFrames > 0) { pacman.pauseFrames--; return; }
 
@@ -990,7 +1171,7 @@
   }
 
   function updateGhost(g) {
-    if (readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || gameOver) return;
+    if (readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || cutscene || gameOver) return;
 
     if (g.state === 'frightened') {
       g.flash = !manualMode && frightenedTimer < 2 && Math.floor(frightenedTimer * 10) % 2 === 0;
@@ -1074,13 +1255,15 @@
   }
 
   function collide() {
-    if (readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || gameOver) return;
+    if (readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || cutscene || gameOver) return;
 
     if (fruit) {
       if (distSq(pacman.x, pacman.y, fruit.x, fruit.y) < 36) {
         const pts = fruitScoreForLevel();
         addScore(pts);
         fruitAward = { x: fruit.x, y: fruit.y, text: String(pts), timer: 1.1 };
+        playSound('eat_fruit');
+        eatenFruits.push(fruit.kind);
         fruit = null;
       }
     }
@@ -1145,8 +1328,10 @@
     if (levelClearTimer > 0) {
       levelClearTimer -= dt;
       flashTimer += dt;
-      if (levelClearTimer <= 0) startNextLevel();
+      if (levelClearTimer <= 0) { levelClearTimer = 0; startCutscene(); }
     }
+
+    if (cutscene) updateCutscene(dt);
 
     if (frightenedScorePopup) {
       frightenedScorePopup.timer -= dt;
@@ -1406,6 +1591,37 @@
     }
   }
 
+  // Pac-Man shape: facing `dirName`, mouth half-angle `mouth` (radians), radius r
+  function drawPacShape(x, y, dirName, mouth, r) {
+    const angle = { right: 0, left: Math.PI, up: -Math.PI / 2, down: Math.PI / 2, none: Math.PI }[dirName];
+    ctx.fillStyle = '#ffe400';
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.arc(x, y, r, angle + mouth, angle - mouth + Math.PI * 2);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawCutscene() {
+    const c = cutscene, y = 17 * TILE + 4;
+    const mouth = 0.16 + Math.abs(Math.sin(c.t * 14)) * 0.34;
+    if (c.t < c.half) {
+      // there: Pac-Man runs left, Blinky right behind him
+      const k = c.t / c.half;
+      const px = WIDTH + 12 - k * (WIDTH + 70);
+      const gx = px + 26 - k * 8;
+      at16(px, y, () => drawPacShape(px, y, 'left', mouth, 3.9));
+      at16(gx, y, () => drawGhost({ x: gx, y, dir: DIR.left, state: 'normal', color: '#ff2d2d', flash: false }));
+    } else {
+      // and back: blue Blinky runs right, a giant Pac-Man after him
+      const k = Math.min(1, (c.t - c.half) / c.half);
+      const gx = -12 + k * (WIDTH + 62);
+      const px = gx - 46 + k * 18;      // closes in, but never catches him
+      at16(gx, y, () => drawGhost({ x: gx, y, dir: DIR.right, state: 'frightened', color: '#ff2d2d', flash: false }));
+      at16(px, y - 6, () => drawPacShape(px, y - 6, 'right', mouth, 3.9 * 2.6));
+    }
+  }
+
   function drawPacman() {
     if (levelClearTimer > 0 || pacman.freezeTimer > 0.2) return;
 
@@ -1485,17 +1701,110 @@
 
   function drawFruit() {
     if (!fruit) return;
-    ctx.fillStyle = '#ff2d2d';
-    ctx.beginPath();
-    ctx.arc(fruit.x - 1.2, fruit.y + 0.2, 2.1, 0, Math.PI * 2);
-    ctx.arc(fruit.x + 1.2, fruit.y + 0.2, 2.1, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#7ddc4c';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(fruit.x, fruit.y - 2.2);
-    ctx.lineTo(fruit.x + 1.2, fruit.y - 4.1);
-    ctx.stroke();
+    drawFruitIcon(fruit.kind || 'cherry', fruit.x, fruit.y);
+  }
+
+  // The eight arcade bonus items, designed for an 8x8 cell around (x, y).
+  function drawFruitIcon(kind, x, y) {
+    const disc = (cx, cy, r, col) => { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); };
+    const line = (pts, col, w) => {
+      ctx.strokeStyle = col; ctx.lineWidth = w || 1; ctx.lineCap = 'round'; ctx.beginPath();
+      ctx.moveTo(pts[0], pts[1]); for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]); ctx.stroke();
+    };
+    const dot = (cx, cy, col) => { ctx.fillStyle = col; ctx.fillRect(cx - 0.35, cy - 0.35, 0.7, 0.7); };
+    ctx.save();
+    switch (kind) {
+      case 'cherry':
+        line([x - 1.8, y + 0.8, x + 0.4, y - 3.6, x + 2.6, y - 3.8], '#c87038', 0.8);
+        line([x + 1.6, y + 1.2, x + 0.4, y - 3.6], '#c87038', 0.8);
+        disc(x - 1.8, y + 1.4, 2.0, '#ff1a1a');
+        disc(x + 1.6, y + 1.9, 2.0, '#ff1a1a');
+        dot(x - 2.5, y + 0.8, '#fff'); dot(x + 0.9, y + 1.3, '#fff');
+        break;
+      case 'strawberry':
+        ctx.fillStyle = '#ff1a1a';
+        ctx.beginPath();
+        ctx.moveTo(x - 3.4, y - 1.6);
+        ctx.quadraticCurveTo(x, y - 3.2, x + 3.4, y - 1.6);
+        ctx.quadraticCurveTo(x + 3.2, y + 2.2, x, y + 4);
+        ctx.quadraticCurveTo(x - 3.2, y + 2.2, x - 3.4, y - 1.6);
+        ctx.fill();
+        for (const [dx, dy] of [[-1.8, -0.8], [0.6, -1.2], [2, 0.4], [-0.6, 0.8], [-2, 1.6], [1, 2.2], [0, -0.2]]) dot(x + dx, y + dy, '#fff');
+        ctx.fillStyle = '#2bd62b';
+        ctx.beginPath();
+        ctx.moveTo(x - 2.4, y - 2.4); ctx.lineTo(x, y - 4); ctx.lineTo(x + 2.4, y - 2.4); ctx.lineTo(x, y - 1.8);
+        ctx.closePath(); ctx.fill();
+        break;
+      case 'orange':
+        disc(x, y + 0.6, 3.3, '#ffa020');
+        dot(x - 1.3, y - 0.6, '#ffd59a');
+        line([x, y - 2.6, x, y - 3.8], '#c87038', 0.8);
+        ctx.fillStyle = '#2bd62b';
+        ctx.beginPath(); ctx.ellipse(x + 1.6, y - 3.4, 1.6, 0.8, -0.3, 0, Math.PI * 2); ctx.fill();
+        break;
+      case 'apple':
+        ctx.fillStyle = '#ff1a1a';
+        ctx.beginPath();
+        ctx.arc(x - 1.3, y + 0.8, 2.6, 0, Math.PI * 2);
+        ctx.arc(x + 1.3, y + 0.8, 2.6, 0, Math.PI * 2);
+        ctx.fill();
+        line([x - 2.4, y - 0.2, x - 1.8, y - 1], '#fff', 0.7);
+        line([x, y - 1.6, x + 0.6, y - 4], '#c87038', 0.9);
+        break;
+      case 'melon':
+        disc(x, y + 0.6, 3.4, '#7ddc4c');
+        line([x - 2.4, y - 1.2, x - 1, y + 0.6, x - 2.2, y + 2.4], '#1f8a1f', 0.6);
+        line([x + 0.6, y - 2.4, x + 1.4, y - 0.2, x + 0.4, y + 2.8], '#1f8a1f', 0.6);
+        line([x, y - 2.6, x, y - 4], '#c87038', 0.8);
+        dot(x - 1.6, y + 1.6, '#e8ffd8'); dot(x + 2.2, y + 1, '#e8ffd8');
+        break;
+      case 'galaxian':
+        ctx.fillStyle = '#2146ff';
+        ctx.beginPath();
+        ctx.moveTo(x - 4, y - 2); ctx.lineTo(x - 1, y + 1); ctx.lineTo(x - 1, y + 3.2); ctx.lineTo(x - 4, y + 0.6); ctx.closePath();
+        ctx.moveTo(x + 4, y - 2); ctx.lineTo(x + 1, y + 1); ctx.lineTo(x + 1, y + 3.2); ctx.lineTo(x + 4, y + 0.6); ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#ffe400';
+        ctx.beginPath();
+        ctx.moveTo(x - 1.4, y - 1.4); ctx.lineTo(x + 1.4, y - 1.4); ctx.lineTo(x, y + 4); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#ff1a1a';
+        ctx.fillRect(x - 1.2, y - 3.6, 2.4, 2.2);
+        break;
+      case 'bell':
+        ctx.fillStyle = '#ffe400';
+        ctx.beginPath();
+        ctx.moveTo(x - 3.6, y + 2.4);
+        ctx.quadraticCurveTo(x - 2.8, y + 1.6, x - 2.6, y - 0.6);
+        ctx.quadraticCurveTo(x - 2.4, y - 3.8, x, y - 3.8);
+        ctx.quadraticCurveTo(x + 2.4, y - 3.8, x + 2.6, y - 0.6);
+        ctx.quadraticCurveTo(x + 2.8, y + 1.6, x + 3.6, y + 2.4);
+        ctx.closePath(); ctx.fill();
+        line([x - 1.4, y - 2, x - 1.6, y + 0.6], '#fff', 0.6);
+        disc(x, y + 3, 1.1, '#00c8ff');
+        break;
+      case 'key':
+      default:
+        ctx.fillStyle = '#00c8ff';
+        ctx.beginPath();
+        ctx.moveTo(x - 2.2, y - 4); ctx.lineTo(x + 2.2, y - 4); ctx.lineTo(x + 2.6, y - 2.6); ctx.lineTo(x + 2.2, y - 1);
+        ctx.lineTo(x - 2.2, y - 1); ctx.lineTo(x - 2.6, y - 2.6); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#000';
+        ctx.fillRect(x - 1, y - 3.2, 2, 0.8);
+        line([x, y - 1, x, y + 4], '#e8e8f0', 1);
+        line([x + 0.4, y + 1.6, x + 1.6, y + 1.6], '#e8e8f0', 0.8);
+        line([x + 0.4, y + 3.2, x + 1.6, y + 3.2], '#e8e8f0', 0.8);
+        break;
+    }
+    ctx.restore();
+  }
+
+  // bottom right: the fruits eaten so far, oldest at the right edge (max. 7, like the arcade)
+  function drawEatenFruits() {
+    const list = eatenFruits.slice(-7);
+    for (let i = 0; i < list.length; i++) {
+      const x = WIDTH - 16 - i * 14, y = HEIGHT - 11;
+      at16(x, y, () => drawFruitIcon(list[i], x, y));
+    }
   }
 
   function drawTextPopup(p, color) {
@@ -1504,7 +1813,7 @@
   }
 
   function drawUI() {
-    const playing = readyTimer <= 0 && !gameOver && deathTimer <= 0;
+    const playing = readyTimer <= 0 && !gameOver && deathTimer <= 0 && !cutscene;
     if (!playing || Math.floor(performance.now() / 270) % 2 === 0) arcadeText('1UP', 24, 0, '#ffffff');
     arcadeText('HIGH SCORE', 72, 0, '#ffffff');
     arcadeText(score === 0 ? '00' : String(score), 56, 8, '#ffffff', 8, 'right');
@@ -1521,8 +1830,9 @@
       ctx.fill();
     }
 
-    arcadeText('L' + level, WIDTH - 8, HEIGHT - 15, '#ffffff', 8, 'right');
+    drawEatenFruits();
     if (manualMode) arcadeText('MANUAL', WIDTH / 2, HEIGHT - 15, '#ffb852', 8, 'center');
+    if (!soundOn) arcadeText('SOUND OFF', WIDTH / 2, 0, '#9aa0b8', 4.5, 'center');
     if (configSource === 'built-in') arcadeText('BUILT-IN CONFIG', WIDTH / 2, HEIGHT - 6, '#ff8c00', 4.5, 'center');
 
     // READY! / GAME OVER in the corridor below the ghost house, as in the arcade
@@ -1540,7 +1850,8 @@
   let testReport = null;
 
   function runAutotests() {
-    const saved = { manualMode, showBubbles, highScore };
+    const saved = { manualMode, showBubbles, highScore, soundOn };
+    soundTestLog = [];   // record sounds instead of playing them
     const results = [];
     const FRAME = 1 / 60;
     const sim = (frames) => { for (let i = 0; i < frames; i++) step(FRAME); };
@@ -1768,7 +2079,55 @@
       fresh();
       for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (maze[y][x] === '.' || maze[y][x] === 'o') maze[y][x] = ' ';
       maze[7][1] = '.'; recountPellets(); placePac(1, 7, DIR.right); sim(1);
-      ok(levelClearTimer > 0, 'no clear'); sim(140); eq(level, 2); eq(pelletsLeft, 244);
+      ok(levelClearTimer > 0, 'no clear'); sim(140); ok(cutscene, 'no intermission');
+      let f = 0; while (cutscene && f++ < 60 * 30) step(FRAME);
+      eq(level, 2); eq(pelletsLeft, 244); ok(readyTimer > 0, 'no READY! on the new level');
+    });
+    const clearLevel = () => {
+      for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (maze[y][x] === '.' || maze[y][x] === 'o') maze[y][x] = ' ';
+      maze[7][1] = '.'; recountPellets(); placePac(1, 7, DIR.right); sim(1);
+      let f = 0; while (!cutscene && f++ < 600) step(FRAME);
+    };
+    test('Fruit per level as in the arcade', () => {
+      const want = { 1: 'cherry', 2: 'strawberry', 3: 'orange', 4: 'orange', 5: 'apple', 7: 'melon', 9: 'galaxian', 11: 'bell', 13: 'key', 40: 'key' };
+      for (const [lv, k] of Object.entries(want)) eq(fruitForLevel(Number(lv)), k, 'level ' + lv);
+      const saved = level;
+      try { level = 2; eq(fruitScoreForLevel(), 300); level = 13; eq(fruitScoreForLevel(), 5000); } finally { level = saved; }
+    });
+    test('Eaten fruit goes to the bottom-right row', () => {
+      fresh(); eq(eatenFruits.length, 0, 'new game'); level = 3; placePac(1, 7, DIR.right); spawnFruit(); eq(fruit.kind, 'orange');
+      const s = score; pacman.x = fruit.x; pacman.y = fruit.y; collide();
+      eq(score - s, 500); eq(eatenFruits.join(), 'orange');
+      placePac(1, 7, DIR.right); spawnFruit(); fruit.timer = 0.01; sim(2); eq(fruit, null, 'fruit did not expire'); eq(eatenFruits.length, 1, 'missed fruit counted');
+    });
+    test('Fruit row shows at most 7', () => {
+      fresh(); eatenFruits = ['cherry', 'strawberry', 'orange', 'orange', 'apple', 'apple', 'melon', 'melon', 'galaxian'];
+      let n = 0; const orig = drawFruitIcon;
+      drawFruitIcon = () => { n++; };
+      try { drawEatenFruits(); } finally { drawFruitIcon = orig; }
+      eq(n, 7);
+    });
+    test('Intermission after every level', () => {
+      fresh(); clearLevel(); ok(cutscene, 'no intermission after level 1');
+      const x = pacman.x, sc = score; sim(60);
+      eq(level, 1, 'level changed too early'); eq(desiredLoop(), null, 'siren during intermission'); eq(score, sc);
+      let f = 0; while (cutscene && f++ < 60 * 30) step(FRAME);
+      eq(level, 2); readyTimer = 0; clearLevel(); ok(cutscene, 'no intermission after level 2');
+    });
+    test('Intermission plays its music there and back', () => {
+      fresh(); const s = heard(() => { clearLevel(); let f = 0; while (cutscene && f++ < 60 * 30) step(FRAME); });
+      eq(s.filter(n => n === 'cutscene').length, 2);
+      ok(!SOUNDS.cutscene || !SOUNDS.cutscene.loop, 'cutscene must not be a loop');
+    });
+    test('Intermission halves follow the music length', () => {
+      const d = soundDuration('cutscene');
+      eq(cutsceneHalf(), d || CUTSCENE_HALF_DEFAULT);
+      fresh(); clearLevel(); const h = cutscene.half; let f = 0;
+      while (cutscene && f++ < 60 * 30) step(FRAME);
+      ok(Math.abs(f / 60 - 2 * h) < 0.1, 'took ' + (f / 60).toFixed(2) + ' s for 2 x ' + h.toFixed(2));
+    });
+    test('R during the intermission starts a clean game', () => {
+      fresh(); clearLevel(); ok(cutscene); startGame(); eq(cutscene, null); eq(level, 1); eq(eatenFruits.length, 0);
     });
 
     // ---------- configuration (YAML) ----------
@@ -1798,6 +2157,56 @@
         modeTimer = MODE_SCHEDULE[1].seconds - 1e-6; updateMode(FRAME);
         eq(g.dir, DIR.left, 'did not reverse with the rule');
       } finally { CFG.fsm.transitions = saved; }
+    });
+
+    // ---------- sound ----------
+    const heard = (fn) => { soundTestLog.length = 0; fn(); return soundTestLog.slice(); };
+    test('Sound list from sounds.yaml', () => {
+      for (const n of ['start', 'chomp_a', 'chomp_b', 'siren_1', 'fright', 'eyes', 'eat_ghost', 'eat_fruit', 'death'])
+        ok(SOUNDS[n] && SOUNDS[n].file, 'missing ' + n);
+      ok(SOUNDS.siren_1.loop && SOUNDS.fright.loop && SOUNDS.eyes.loop, 'loops not marked');
+      ok(!SOUNDS.death.loop && !SOUNDS.chomp_a.loop, 'one-shot marked as loop');
+    });
+    test('Sound files are readable', () => {
+      const bad = Object.values(SOUNDS).filter(s => s.failed).map(s => s.file);
+      ok(bad.length === 0, 'cannot load: ' + bad.join(', '));
+    });
+    test('New game plays the start jingle', () => {
+      ok(heard(() => startGame()).includes('start'), 'no jingle');
+      const d = soundDuration('start');
+      ok(readyTimer >= Math.min(d, 60) - 1e-6 && readyTimer >= 2, 'READY! (' + readyTimer.toFixed(2) + ' s) shorter than the jingle (' + d.toFixed(2) + ' s)');
+    });
+    test('Dots alternate chomp sounds', () => {
+      fresh(); placePac(1, 7, DIR.right);
+      const s = heard(() => sim(30)).filter(n => n.startsWith('chomp'));
+      ok(s.length >= 2, 'only ' + s.length + ' chomps'); eq(s[0], 'chomp_a'); eq(s[1], 'chomp_b');
+    });
+    test('FSM: eating a ghost sounds', () => {
+      fresh(); triggerFrightened(); placePac(6, 7, DIR.right); placeGhost(G('blinky'), 6, 7, DIR.left, 'frightened');
+      ok(heard(() => collide()).includes('eat_ghost'));
+    });
+    test('FSM: getting caught sounds', () => {
+      fresh(); placePac(6, 7, DIR.right); placeGhost(G('blinky'), 6, 7, DIR.left);
+      ok(heard(() => collide()).includes('death'));
+    });
+    test('Fruit plays eat_fruit', () => {
+      fresh(); spawnFruit(); pacman.x = fruit.x; pacman.y = fruit.y;
+      ok(heard(() => collide()).includes('eat_fruit'));
+    });
+    test('Background sound follows game', () => {
+      fresh(); soundOn = true;
+      const lv = Object.entries(CFG.sounds.siren_levels).sort((a, b) => b[1] - a[1]);
+      eq(desiredLoop(), lv[0][0], 'start (244 left)');
+      for (const [name, min] of lv) { pelletsLeft = min; eq(desiredLoop(), name, min + ' left'); }
+      ok(lv.every(([n]) => SOUNDS[n] && SOUNDS[n].loop), 'every siren level must be a loop');
+      triggerFrightened(); eq(desiredLoop(), 'fright', 'fright');
+      G('blinky').state = 'eyes'; G('blinky').inHouse = false; eq(desiredLoop(), 'eyes', 'eyes');
+      readyTimer = 1; eq(desiredLoop(), null, 'during READY');
+    });
+    test('M switches sound off and on', () => {
+      fresh(); soundOn = true;
+      handleKey('m'); ok(!soundOn, 'still on'); eq(desiredLoop(), null, 'loop while off');
+      handleKey('m'); ok(soundOn, 'still off');
     });
 
     // ---------- touch controls ----------
@@ -1901,6 +2310,7 @@
     // back to a normal game
     testNoDeath = false; manualMode = false; eatPauseTimer = 0;
     showBubbles = saved.showBubbles; highScore = saved.highScore;
+    soundTestLog = null; soundOn = saved.soundOn; currentLoop = null; loopPlaying = false;
     startGame();
     const passed = results.filter(r => r.pass).length;
     console.log('AUTOTEST ' + passed + '/' + results.length + ' passed');
@@ -1937,6 +2347,13 @@
     ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    if (cutscene) {
+      // intermission: no maze, only the chase
+      drawCutscene();
+      drawUI();
+      drawTestReport();
+      return;
+    }
     drawMaze();
     if (fruit) at16(fruit.x, fruit.y, drawFruit);
     at16(pacman.x, pacman.y, drawPacman);
@@ -1971,6 +2388,7 @@
       accumulator -= fixed;
     }
 
+    setLoop(desiredLoop());
     draw();
     requestAnimationFrame(loop);
   }
@@ -1987,11 +2405,14 @@
       else testReport = runAutotests();
     }
     else if (testReport) return;
+    else if (key === 'm' || key === 'M') toggleSound();
     else if (key === '0') toggleManual();
     else if (key === 'Tab') showBubbles = !showBubbles;
     else if (manualMode && key >= '1' && key <= '4') stepGhostState(Number(key) - 1);
   }
+  window.addEventListener('pointerdown', unlockAudio, true);
   window.addEventListener('keydown', (e) => {
+    unlockAudio();
     if (e.key === 'Tab' || e.key.startsWith('Arrow')) e.preventDefault();
     handleKey(e.key);
   });

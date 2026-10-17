@@ -77,6 +77,7 @@ ghosts:
 #   reverse: true      the ghost turns around
 #   frightened: true   blue look without changing state (ghosts waiting at home)
 #   action:            score_ghost (Pac-Man eats it) / kill_pacman (Pac-Man loses a life)
+#   sound:             a sound from sounds.yaml to play when the transition happens
 # The first matching line wins. Events with no matching line are ignored.
 transitions:
   - { event: released,     from: HOME,             to: mode }
@@ -85,8 +86,8 @@ transitions:
   - { event: energizer,    from: HOME,             to: HOME,  frightened: true }
   - { event: fright_end,   from: EVADE,            to: mode }
   - { event: fright_end,   from: HOME,             to: HOME,  frightened: false }
-  - { event: touch,        from: EVADE,            to: DEAD,  action: score_ghost }
-  - { event: touch,        from: [SCATTER, CHASE], action: kill_pacman }
+  - { event: touch,        from: EVADE,            to: DEAD,  action: score_ghost, sound: eat_ghost }
+  - { event: touch,        from: [SCATTER, CHASE], action: kill_pacman, sound: death }
   - { event: arrived_home, from: DEAD,             to: HOME }
 
 # Manual mode (key 0): keys 1-4 move ghost 1-4 to the next state in this list.

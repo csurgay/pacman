@@ -1,0 +1,43 @@
+# Sound files used by the game
+#
+# Paths are relative to pacman.html. To use another sound, put the file next to
+# pacman.html (e.g. into mysounds/) and change `file:` below.
+# WAV, MP3 and OGG all work. A missing or unreadable file is simply skipped:
+# the game keeps running without that sound.
+#
+# The generated arcade-style set (gen_sounds.py) is in sounds/; its list is in
+# sounds_generated.yaml. To switch back, copy the file names from there.
+#
+#   loop: true   the sound repeats while its situation lasts (background sounds)
+#   when         where the game plays it (for reading only)
+
+enabled: true
+volume: 0.6          # 0 .. 1, M key toggles sound on/off
+
+sounds:
+  start:     { file: mysounds/pacstart.wav,        when: "new game, during READY!" }
+  chomp_a:   { file: mysounds/pacdot1.wav,         when: "Pac-Man eats a dot or energizer (1st, 3rd, 5th ...)" }
+  chomp_b:   { file: mysounds/pacdot2.wav,         when: "Pac-Man eats a dot or energizer (2nd, 4th, 6th ...)" }
+  siren_1:   { file: mysounds/pacghost1.wav,       loop: true, when: "background, 181 or more pellets left" }
+  siren_2:   { file: mysounds/pacghost2.wav,       loop: true, when: "background, 121-180 pellets left" }
+  siren_3:   { file: mysounds/pacghost3.wav,       loop: true, when: "background, 61-120 pellets left" }
+  siren_4:   { file: mysounds/pacghost4.wav,       loop: true, when: "background, 60 or fewer pellets left" }
+  fright:    { file: mysounds/pacghostblue.wav,    loop: true, when: "background while the ghosts are blue (EVADE)" }
+  eyes:      { file: mysounds/pacghostretreat.wav, loop: true, when: "background while DEAD eyes run home" }
+  eat_ghost: { file: mysounds/pacghosteat.wav,     when: "Pac-Man eats a ghost (FSM: touch EVADE -> DEAD)" }
+  eat_fruit: { file: mysounds/pacfruit.wav,        when: "Pac-Man eats the fruit" }
+  death:     { file: mysounds/pacdie1.wav,         when: "a ghost catches Pac-Man (FSM: touch -> kill_pacman)" }
+  cutscene:  { file: mysounds/paccutscene.wav,     when: "intermission after each level, played twice (there and back)" }
+
+# In mysounds/ but not used by the game yet (no matching event so far):
+#   paccoin.wav        coin inserted
+#   pacextralife.wav   extra life
+#   pacdie2.wav        short death sound (alternative to pacdie1.wav)
+
+# Background siren: which siren plays at how many pellets left.
+# Any number of levels; the first one whose limit is reached wins (checked from the highest).
+siren_levels:
+  siren_1: 181
+  siren_2: 121
+  siren_3: 61
+  siren_4: 0

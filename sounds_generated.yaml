@@ -1,0 +1,36 @@
+# Sound files used by the game
+#
+# Paths are relative to pacman.html. To use your own sound, put the file into the
+# sounds folder (or anywhere next to pacman.html) and change `file:` below.
+# WAV, MP3 and OGG all work. A missing or unreadable file is simply skipped:
+# the game keeps running without that sound.
+#
+# The files that come with the game were generated for this clone
+# (gen_sounds.py): arcade-style effects and an original start jingle,
+# not recordings from the 1980 machine.
+#
+#   loop: true   the sound repeats while its situation lasts (background sounds)
+#   when         where the game plays it (for reading only)
+
+enabled: true
+volume: 0.6          # 0 .. 1, M key toggles sound on/off
+
+sounds:
+  start:     { file: sounds/start.wav,     when: "new game, during READY!" }
+  chomp_a:   { file: sounds/chomp_a.wav,   when: "Pac-Man eats a dot or energizer (1st, 3rd, 5th ...)" }
+  chomp_b:   { file: sounds/chomp_b.wav,   when: "Pac-Man eats a dot or energizer (2nd, 4th, 6th ...)" }
+  siren_1:   { file: sounds/siren_1.wav,   loop: true, when: "background, more than 150 pellets left" }
+  siren_2:   { file: sounds/siren_2.wav,   loop: true, when: "background, 51-150 pellets left" }
+  siren_3:   { file: sounds/siren_3.wav,   loop: true, when: "background, 50 or fewer pellets left" }
+  fright:    { file: sounds/fright.wav,    loop: true, when: "background while the ghosts are blue (EVADE)" }
+  eyes:      { file: sounds/eyes.wav,      loop: true, when: "background while DEAD eyes run home" }
+  eat_ghost: { file: sounds/eat_ghost.wav, when: "Pac-Man eats a ghost (FSM: touch EVADE -> DEAD)" }
+  eat_fruit: { file: sounds/eat_fruit.wav, when: "Pac-Man eats the fruit" }
+  death:     { file: sounds/death.wav,     when: "a ghost catches Pac-Man (FSM: touch -> kill_pacman)" }
+  # no generated "cutscene" sound: without it the intermission runs silently, 5.2 s each way
+
+# Background sound thresholds (pellets left)
+siren_levels:
+  siren_1: 151
+  siren_2: 51
+  siren_3: 0
