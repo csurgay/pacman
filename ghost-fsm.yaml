@@ -1,0 +1,67 @@
+# Ghost state machine (FSM)
+#
+# The game reads this file when it starts and again on every restart (R key).
+#
+#   HOME     waiting in the ghost house, or walking out of it
+#   SCATTER  heading for its own corner
+#   CHASE    hunting Pac-Man, each ghost with its own targeting rule
+#   EVADE    frightened (blue), turns at random, can be eaten
+#   DEAD     eyes running back to the house
+
+states:
+  HOME:    { color: "#9aa0b8", speed: house,      target: none }
+  SCATTER: { color: "#7ddc4c", speed: normal,     target: scatter_corner }
+  CHASE:   { color: "#ff5050", speed: normal,     target: chase }
+  EVADE:   { color: "#4f7bff", speed: frightened, target: random }
+  DEAD:    { color: "#ffffff", speed: eyes,       target: house_door }
+
+# Global scatter/chase timer (level 1). In transitions, `to: mode` means
+# whichever of SCATTER / CHASE this timer is in right now.
+# The timer pauses while the ghosts are frightened.
+mode_schedule:
+  - { mode: SCATTER, seconds: 7 }
+  - { mode: CHASE,   seconds: 20 }
+  - { mode: SCATTER, seconds: 7 }
+  - { mode: CHASE,   seconds: 20 }
+  - { mode: SCATTER, seconds: 5 }
+  - { mode: CHASE,   seconds: 20 }
+  - { mode: SCATTER, seconds: 5 }
+  - { mode: CHASE,   seconds: forever }
+
+# How long the ghosts stay blue after Pac-Man eats an energizer.
+fright_seconds: 6
+
+# Per ghost: starting state, how many eaten dots release it from the house,
+# and its scatter corner (tile x, tile y; may lie outside the maze).
+ghosts:
+  blinky: { start: SCATTER, release_dots: 0,  scatter_corner: [25, 0] }
+  pinky:  { start: HOME,    release_dots: 0,  scatter_corner: [2, 0] }
+  inky:   { start: HOME,    release_dots: 12, scatter_corner: [27, 35] }
+  clyde:  { start: HOME,    release_dots: 32, scatter_corner: [0, 35] }
+
+# Events raised by the game:
+#   released      the dot counter lets the ghost out of the house
+#   mode_change   the scatter/chase timer switches
+#   energizer     Pac-Man eats an energizer
+#   fright_end    the blue time is over
+#   touch         Pac-Man and the ghost are on the same spot
+#   arrived_home  DEAD eyes reached their place in the house
+#
+# Options:
+#   reverse: true      the ghost turns around
+#   frightened: true   blue look without changing state (ghosts waiting at home)
+#   action:            score_ghost (Pac-Man eats it) / kill_pacman (Pac-Man loses a life)
+# The first matching line wins. Events with no matching line are ignored.
+transitions:
+  - { event: released,     from: HOME,             to: mode }
+  - { event: mode_change,  from: [SCATTER, CHASE], to: mode,  reverse: true }
+  - { event: energizer,    from: [SCATTER, CHASE], to: EVADE, reverse: true }
+  - { event: energizer,    from: HOME,             to: HOME,  frightened: true }
+  - { event: fright_end,   from: EVADE,            to: mode }
+  - { event: fright_end,   from: HOME,             to: HOME,  frightened: false }
+  - { event: touch,        from: EVADE,            to: DEAD,  action: score_ghost }
+  - { event: touch,        from: [SCATTER, CHASE], action: kill_pacman }
+  - { event: arrived_home, from: DEAD,             to: HOME }
+
+# Manual mode (key 0): keys 1-4 move ghost 1-4 to the next state in this list.
+manual_cycle: [HOME, SCATTER, CHASE, EVADE, DEAD]

@@ -1,0 +1,53 @@
+# Pac-Man speed table
+#
+# The game reads this file when it starts and again on every restart (R key),
+# so edits take effect without reloading the page.
+#
+# All speeds are percentages. 100 % equals `px_per_frame_at_100` pixels per frame
+# at 60 frames per second. The arcade's 100 % is 75.758 px/s = 1.2626 px/frame.
+#
+# `active` selects the profile the game uses.
+
+active: current
+
+profiles:
+
+  # The speeds this clone has used so far (ghost / Pac-Man = 93 %, everything ~19 % slower than the arcade).
+  current:
+    px_per_frame_at_100: 1.0
+    pacman:
+      normal: 82                 # 0.82 px/frame
+      frightened: 92             # while the ghosts are blue
+      dot_pause_frames: 1        # Pac-Man stops for 1 frame on every dot
+      energizer_pause_frames: 3  # and for 3 frames on an energizer
+    ghost:
+      normal: 76
+      tunnel: 51.7               # inside the side tunnels
+      frightened: 46
+      frightened_tunnel: 34
+      eyes: 145                  # DEAD: eyes running back to the house
+      house: 50                  # bobbing in the house and walking out
+    blinky:
+      normal: 79
+      elroy1: { dots_left: 20, speed: 84 }   # "Cruise Elroy": Blinky speeds up near the end of the level
+      elroy2: { dots_left: 10, speed: 90 }
+
+  # The original arcade, level 1 (the commonly documented table).
+  arcade_level1:
+    px_per_frame_at_100: 1.2626
+    pacman:
+      normal: 80
+      frightened: 90
+      dot_pause_frames: 1
+      energizer_pause_frames: 3
+    ghost:
+      normal: 75
+      tunnel: 40
+      frightened: 50
+      frightened_tunnel: 40      # the tunnel limit applies to blue ghosts too
+      eyes: 150                  # not in the published table; estimate
+      house: 40                  # not in the published table; estimate
+    blinky:
+      normal: 75                 # same as the others until Elroy kicks in
+      elroy1: { dots_left: 20, speed: 80 }
+      elroy2: { dots_left: 10, speed: 85 }

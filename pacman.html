@@ -1,0 +1,1871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pac-Man First Level Clone</title>
+  <style>
+    html, body {
+      margin: 0;
+      background: #000;
+      color: #fff;
+      font-family: Arial, Helvetica, sans-serif;
+      height: 100%;
+      overflow: hidden;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    canvas {
+      background: #000;
+      image-rendering: pixelated;
+      box-shadow: 0 0 0 2px #111, 0 0 40px rgba(40, 80, 255, 0.18);
+    }
+  </style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+(() => {
+  const TILE = 8;
+  const COLS = 28;
+  const ROWS = 36;
+  const WIDTH = COLS * TILE;
+  const HEIGHT = ROWS * TILE;
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  // The game logic runs in the original 224x288 coordinate space.
+  // RENDER_SCALE sets how many canvas pixels one game pixel gets: 1 = the arcade's own
+  // resolution (blocky), 2-3 = slightly smoothed lines like an emulator, higher = sharp vectors.
+  // The canvas is then stretched to the window without smoothing.
+  const RENDER_SCALE = 2;
+  const renderScale = RENDER_SCALE;
+  canvas.width = WIDTH * RENDER_SCALE;
+  canvas.height = HEIGHT * RENDER_SCALE;
+  // Text goes on a second, transparent canvas on top, at full screen resolution,
+  // so the letters stay sharp while the maze and the characters are a bit pixelated.
+  const textCanvas = document.createElement('canvas');
+  textCanvas.style.cssText = 'position:fixed;pointer-events:none;background:transparent;box-shadow:none;';
+  document.body.appendChild(textCanvas);
+  const tctx = textCanvas.getContext('2d');
+  let textScale = 1;
+  function resizeCanvas() {
+    const cssScale = Math.max(1, Math.min((window.innerWidth - 16) / WIDTH, (window.innerHeight - 16) / HEIGHT));
+    const dpr = window.devicePixelRatio || 1;
+    const cw = Math.round(WIDTH * cssScale), ch = Math.round(HEIGHT * cssScale);
+    canvas.style.width = cw + 'px';
+    canvas.style.height = ch + 'px';
+    textCanvas.style.width = cw + 'px';
+    textCanvas.style.height = ch + 'px';
+    textCanvas.width = Math.round(cw * dpr);
+    textCanvas.height = Math.round(ch * dpr);
+    textScale = textCanvas.width / WIDTH;
+    const r = canvas.getBoundingClientRect();
+    textCanvas.style.left = r.left + 'px';
+    textCanvas.style.top = r.top + 'px';
+  }
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+
+  // draw a sprite designed for 8x8 at a larger size, scaled around its centre
+  const SPRITE_SCALE = 1.3; // about 10x10 px: fits the 8 px corridors with minimal overlap
+  function at16(x, y, fn) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(SPRITE_SCALE, SPRITE_SCALE);
+    ctx.translate(-x, -y);
+    fn();
+    ctx.restore();
+  }
+
+  const DIR = {
+    left:  { x: -1, y:  0, name: 'left' },
+    right: { x:  1, y:  0, name: 'right' },
+    up:    { x:  0, y: -1, name: 'up' },
+    down:  { x:  0, y:  1, name: 'down' },
+    none:  { x:  0, y:  0, name: 'none' }
+  };
+
+  const TURN_PRIORITY = [DIR.up, DIR.left, DIR.down, DIR.right];
+  const EAT_GHOST_SCORES = [200, 400, 800, 1600];
+
+  const LEVEL1 = [
+    "############################",
+    "############################",
+    "############################",
+    "#............##............#",
+    "#.####.#####.##.#####.####.#",
+    "#o####.#####.##.#####.####o#",
+    "#.####.#####.##.#####.####.#",
+    "#..........................#",
+    "#.####.##.########.##.####.#",
+    "#.####.##.########.##.####.#",
+    "#......##....##....##......#",
+    "######.##### ## #####.######",
+    "     #.##### ## #####.#     ",
+    "     #.##          ##.#     ",
+    "     #.## ###--### ##.#     ",
+    "######.## #      # ##.######",
+    "      .   #      #   .      ",
+    "######.## #      # ##.######",
+    "     #.## ######## ##.#     ",
+    "     #.##          ##.#     ",
+    "     #.## ######## ##.#     ",
+    "######.## ######## ##.######",
+    "#............##............#",
+    "#.####.#####.##.#####.####.#",
+    "#.####.#####.##.#####.####.#",
+    "#o..##.......  .......##..o#",
+    "###.##.##.########.##.##.###",
+    "###.##.##.########.##.##.###",
+    "#......##....##....##......#",
+    "#.##########.##.##########.#",
+    "#.##########.##.##########.#",
+    "#..........................#",
+    "############################",
+    "############################",
+    "############################",
+    "############################"
+  ];
+
+  const SCATTER_TARGET = {   // overwritten from ghost-fsm.yaml
+    blinky: { x: 25, y: 0 },
+    pinky:  { x: 2, y: 0 },
+    inky:   { x: 27, y: 35 },
+    clyde:  { x: 0, y: 35 }
+  };
+
+  let MODE_SCHEDULE = [      // overwritten from ghost-fsm.yaml
+    { mode: 'scatter', seconds: 7 },
+    { mode: 'chase', seconds: 20 },
+    { mode: 'scatter', seconds: 7 },
+    { mode: 'chase', seconds: 20 },
+    { mode: 'scatter', seconds: 5 },
+    { mode: 'chase', seconds: 20 },
+    { mode: 'scatter', seconds: 5 },
+    { mode: 'chase', seconds: 999999 }
+  ];
+
+
+  // =====================================================================
+  //  CONFIGURATION — pacman-speeds.yaml and ghost-fsm.yaml
+  //  Read at start and on every restart (R). If the files can't be fetched
+  //  (the page is opened as file:// instead of from a web server), the
+  //  built-in copies below are used and a note appears at the bottom.
+  // =====================================================================
+  const CONFIG_FILES = { speeds: 'pacman-speeds.yaml', fsm: 'ghost-fsm.yaml' };
+  const BUILTIN_SPEEDS_YAML = "# Pac-Man speed table\n#\n# The game reads this file when it starts and again on every restart (R key),\n# so edits take effect without reloading the page.\n#\n# All speeds are percentages. 100 % equals `px_per_frame_at_100` pixels per frame\n# at 60 frames per second. The arcade's 100 % is 75.758 px/s = 1.2626 px/frame.\n#\n# `active` selects the profile the game uses.\n\nactive: current\n\nprofiles:\n\n  # The speeds this clone has used so far (ghost / Pac-Man = 93 %, everything ~19 % slower than the arcade).\n  current:\n    px_per_frame_at_100: 1.0\n    pacman:\n      normal: 82                 # 0.82 px/frame\n      frightened: 92             # while the ghosts are blue\n      dot_pause_frames: 1        # Pac-Man stops for 1 frame on every dot\n      energizer_pause_frames: 3  # and for 3 frames on an energizer\n    ghost:\n      normal: 76\n      tunnel: 51.7               # inside the side tunnels\n      frightened: 46\n      frightened_tunnel: 34\n      eyes: 145                  # DEAD: eyes running back to the house\n      house: 50                  # bobbing in the house and walking out\n    blinky:\n      normal: 79\n      elroy1: { dots_left: 20, speed: 84 }   # \"Cruise Elroy\": Blinky speeds up near the end of the level\n      elroy2: { dots_left: 10, speed: 90 }\n\n  # The original arcade, level 1 (the commonly documented table).\n  arcade_level1:\n    px_per_frame_at_100: 1.2626\n    pacman:\n      normal: 80\n      frightened: 90\n      dot_pause_frames: 1\n      energizer_pause_frames: 3\n    ghost:\n      normal: 75\n      tunnel: 40\n      frightened: 50\n      frightened_tunnel: 40      # the tunnel limit applies to blue ghosts too\n      eyes: 150                  # not in the published table; estimate\n      house: 40                  # not in the published table; estimate\n    blinky:\n      normal: 75                 # same as the others until Elroy kicks in\n      elroy1: { dots_left: 20, speed: 80 }\n      elroy2: { dots_left: 10, speed: 85 }\n";
+  const BUILTIN_FSM_YAML = "# Ghost state machine (FSM)\n#\n# The game reads this file when it starts and again on every restart (R key).\n#\n#   HOME     waiting in the ghost house, or walking out of it\n#   SCATTER  heading for its own corner\n#   CHASE    hunting Pac-Man, each ghost with its own targeting rule\n#   EVADE    frightened (blue), turns at random, can be eaten\n#   DEAD     eyes running back to the house\n\nstates:\n  HOME:    { color: \"#9aa0b8\", speed: house,      target: none }\n  SCATTER: { color: \"#7ddc4c\", speed: normal,     target: scatter_corner }\n  CHASE:   { color: \"#ff5050\", speed: normal,     target: chase }\n  EVADE:   { color: \"#4f7bff\", speed: frightened, target: random }\n  DEAD:    { color: \"#ffffff\", speed: eyes,       target: house_door }\n\n# Global scatter/chase timer (level 1). In transitions, `to: mode` means\n# whichever of SCATTER / CHASE this timer is in right now.\n# The timer pauses while the ghosts are frightened.\nmode_schedule:\n  - { mode: SCATTER, seconds: 7 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 7 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 5 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 5 }\n  - { mode: CHASE,   seconds: forever }\n\n# How long the ghosts stay blue after Pac-Man eats an energizer.\nfright_seconds: 6\n\n# Per ghost: starting state, how many eaten dots release it from the house,\n# and its scatter corner (tile x, tile y; may lie outside the maze).\nghosts:\n  blinky: { start: SCATTER, release_dots: 0,  scatter_corner: [25, 0] }\n  pinky:  { start: HOME,    release_dots: 0,  scatter_corner: [2, 0] }\n  inky:   { start: HOME,    release_dots: 12, scatter_corner: [27, 35] }\n  clyde:  { start: HOME,    release_dots: 32, scatter_corner: [0, 35] }\n\n# Events raised by the game:\n#   released      the dot counter lets the ghost out of the house\n#   mode_change   the scatter/chase timer switches\n#   energizer     Pac-Man eats an energizer\n#   fright_end    the blue time is over\n#   touch         Pac-Man and the ghost are on the same spot\n#   arrived_home  DEAD eyes reached their place in the house\n#\n# Options:\n#   reverse: true      the ghost turns around\n#   frightened: true   blue look without changing state (ghosts waiting at home)\n#   action:            score_ghost (Pac-Man eats it) / kill_pacman (Pac-Man loses a life)\n# The first matching line wins. Events with no matching line are ignored.\ntransitions:\n  - { event: released,     from: HOME,             to: mode }\n  - { event: mode_change,  from: [SCATTER, CHASE], to: mode,  reverse: true }\n  - { event: energizer,    from: [SCATTER, CHASE], to: EVADE, reverse: true }\n  - { event: energizer,    from: HOME,             to: HOME,  frightened: true }\n  - { event: fright_end,   from: EVADE,            to: mode }\n  - { event: fright_end,   from: HOME,             to: HOME,  frightened: false }\n  - { event: touch,        from: EVADE,            to: DEAD,  action: score_ghost }\n  - { event: touch,        from: [SCATTER, CHASE], action: kill_pacman }\n  - { event: arrived_home, from: DEAD,             to: HOME }\n\n# Manual mode (key 0): keys 1-4 move ghost 1-4 to the next state in this list.\nmanual_cycle: [HOME, SCATTER, CHASE, EVADE, DEAD]\n";
+  let CFG = null;              // { profileName, sp, unit, fsm }
+  let configSource = '';       // 'yaml' or 'built-in'
+
+  // A small YAML reader for the subset the config files use: nested maps and lists
+  // by indentation, "- " list items (scalars or maps), inline [..] and {..},
+  // quoted strings, numbers, true/false/null and # comments.
+  function parseYAML(src) {
+    const lines = [];
+    for (const raw of src.split(/\r?\n/)) {
+      let s = '', q = null;
+      for (let k = 0; k < raw.length; k++) {
+        const ch = raw[k];
+        if (q) { s += ch; if (ch === q) q = null; continue; }
+        if (ch === '"' || ch === "'") { q = ch; s += ch; continue; }
+        if (ch === '#' && (k === 0 || /\s/.test(raw[k - 1]))) break;
+        s += ch;
+      }
+      if (!s.trim()) continue;
+      lines.push({ indent: s.length - s.trimStart().length, text: s.trim() });
+    }
+    let i = 0;
+    const isItem = (txt) => txt === '-' || txt.startsWith('- ');
+    function splitKey(txt) {
+      let q = null;
+      for (let k = 0; k < txt.length; k++) {
+        const ch = txt[k];
+        if (q) { if (ch === q) q = null; continue; }
+        if (ch === '"' || ch === "'") { q = ch; continue; }
+        if (ch === ':' && (k === txt.length - 1 || txt[k + 1] === ' ')) {
+          return { key: unquote(txt.slice(0, k).trim()), rest: txt.slice(k + 1).trim() };
+        }
+      }
+      return null;
+    }
+    function unquote(s) {
+      if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) return s.slice(1, -1);
+      return s;
+    }
+    function scalar(s) {
+      s = s.trim();
+      if (s === '' || s === '~' || s === 'null') return null;
+      if (s === 'true') return true;
+      if (s === 'false') return false;
+      if (/^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(s)) return Number(s);
+      return unquote(s);
+    }
+    function flow(s) {                        // inline value: [..], {..} or a scalar
+      let p = 0;
+      const ws = () => { while (p < s.length && /\s/.test(s[p])) p++; };
+      function value() {
+        ws();
+        if (s[p] === '[') {
+          p++; const arr = []; ws();
+          if (s[p] === ']') { p++; return arr; }
+          for (;;) { arr.push(value()); ws(); if (s[p] === ',') { p++; continue; } if (s[p] === ']') { p++; return arr; } throw new Error('YAML: bad list: ' + s); }
+        }
+        if (s[p] === '{') {
+          p++; const obj = {}; ws();
+          if (s[p] === '}') { p++; return obj; }
+          for (;;) {
+            ws(); let k0 = p;
+            while (p < s.length && s[p] !== ':') p++;
+            const key = unquote(s.slice(k0, p).trim()); p++;
+            obj[key] = value(); ws();
+            if (s[p] === ',') { p++; continue; }
+            if (s[p] === '}') { p++; return obj; }
+            throw new Error('YAML: bad map: ' + s);
+          }
+        }
+        if (s[p] === '"' || s[p] === "'") {
+          const qc = s[p]; const st = ++p;
+          while (p < s.length && s[p] !== qc) p++;
+          return s.slice(st, p++);
+        }
+        const st = p;
+        while (p < s.length && !',]}'.includes(s[p])) p++;
+        return scalar(s.slice(st, p));
+      }
+      const v = value(); ws();
+      if (p < s.length) throw new Error('YAML: unexpected text: ' + s.slice(p));
+      return v;
+    }
+    function block(indent) {
+      if (i >= lines.length) return null;
+      return isItem(lines[i].text) ? seq(lines[i].indent) : map(lines[i].indent);
+    }
+    function map(indent) {
+      const obj = {};
+      while (i < lines.length && lines[i].indent === indent && !isItem(lines[i].text)) {
+        const kv = splitKey(lines[i].text);
+        if (!kv) throw new Error('YAML: expected "key: value" in line: ' + lines[i].text);
+        i++;
+        if (kv.rest === '') {
+          const nested = i < lines.length && (lines[i].indent > indent || (lines[i].indent === indent && isItem(lines[i].text)));
+          obj[kv.key] = nested ? block(lines[i].indent) : null;
+        } else obj[kv.key] = flow(kv.rest);
+      }
+      return obj;
+    }
+    function seq(indent) {
+      const arr = [];
+      while (i < lines.length && lines[i].indent === indent && isItem(lines[i].text)) {
+        const rest = lines[i].text.replace(/^-\s*/, '');
+        if (rest === '') { i++; arr.push(block(lines[i].indent)); }
+        else if (!/^[\[{"']/.test(rest) && splitKey(rest)) {   // "- key: value" starts a map item
+          lines[i] = { indent: indent + 2, text: rest };
+          arr.push(map(indent + 2));
+        } else { i++; arr.push(flow(rest)); }
+      }
+      return arr;
+    }
+    const doc = block(lines.length ? lines[0].indent : 0);
+    if (i < lines.length) throw new Error('YAML: could not read line: ' + lines[i].text);
+    return doc;
+  }
+
+  function applyConfig(speedsDoc, fsmDoc) {
+    const fail = (m) => { throw new Error(m); };
+    if (!speedsDoc || !speedsDoc.profiles) fail('pacman-speeds.yaml: "profiles" missing');
+    const sp = speedsDoc.profiles[speedsDoc.active];
+    if (!sp) fail('pacman-speeds.yaml: no profile called "' + speedsDoc.active + '"');
+    for (const k of ['px_per_frame_at_100', 'pacman', 'ghost', 'blinky']) if (sp[k] == null) fail('pacman-speeds.yaml: "' + k + '" missing');
+    for (const k of ['normal', 'frightened', 'dot_pause_frames', 'energizer_pause_frames']) if (typeof sp.pacman[k] !== 'number') fail('pacman-speeds.yaml: pacman.' + k + ' must be a number');
+    for (const k of ['normal', 'tunnel', 'frightened', 'frightened_tunnel', 'eyes', 'house']) if (typeof sp.ghost[k] !== 'number') fail('pacman-speeds.yaml: ghost.' + k + ' must be a number');
+    if (!fsmDoc || !fsmDoc.states || !fsmDoc.transitions || !fsmDoc.mode_schedule || !fsmDoc.ghosts) fail('ghost-fsm.yaml: states / transitions / mode_schedule / ghosts missing');
+    for (const s of ['HOME', 'SCATTER', 'CHASE', 'EVADE', 'DEAD']) if (!fsmDoc.states[s]) fail('ghost-fsm.yaml: state ' + s + ' missing');
+    for (const n of ['blinky', 'pinky', 'inky', 'clyde']) if (!fsmDoc.ghosts[n]) fail('ghost-fsm.yaml: ghost ' + n + ' missing');
+    for (const tr of fsmDoc.transitions) {
+      const froms = Array.isArray(tr.from) ? tr.from : [tr.from];
+      for (const f of froms) if (!fsmDoc.states[f]) fail('ghost-fsm.yaml: unknown state "' + f + '" in transition ' + tr.event);
+      if (tr.to != null && tr.to !== 'mode' && !fsmDoc.states[tr.to]) fail('ghost-fsm.yaml: unknown target state "' + tr.to + '"');
+    }
+    CFG = { profileName: speedsDoc.active, sp, unit: sp.px_per_frame_at_100 / 100, fsm: fsmDoc };
+    MODE_SCHEDULE = fsmDoc.mode_schedule.map(m => ({
+      mode: String(m.mode).toLowerCase(),
+      seconds: m.seconds === 'forever' ? Infinity : Number(m.seconds)
+    }));
+    for (const n of Object.keys(fsmDoc.ghosts)) {
+      const c = fsmDoc.ghosts[n].scatter_corner;
+      if (c) SCATTER_TARGET[n] = { x: c[0], y: c[1] };
+    }
+  }
+
+  async function loadConfig() {
+    try {
+      const get = async (f) => { const r = await fetch(f, { cache: 'no-store' }); if (!r.ok) throw new Error(f + ': HTTP ' + r.status); return r.text(); };
+      const [a, b] = await Promise.all([get(CONFIG_FILES.speeds), get(CONFIG_FILES.fsm)]);
+      applyConfig(parseYAML(a), parseYAML(b));
+      configSource = 'yaml';
+      console.log('Config loaded from YAML files, speed profile "' + CFG.profileName + '"');
+    } catch (e) {
+      console.warn('YAML config not used (' + e.message + '). Using the built-in copy.');
+      applyConfig(parseYAML(BUILTIN_SPEEDS_YAML), parseYAML(BUILTIN_FSM_YAML));
+      configSource = 'built-in';
+    }
+  }
+
+  // ---------- FSM ----------
+  function currentModeLabel(g) {
+    return (manualMode ? (g.manualMode || 'scatter') : globalMode).toUpperCase();
+  }
+  // Put a ghost into a state (sets the underlying movement fields).
+  function setGhostState(g, to) {
+    switch (to) {
+      case 'HOME': putHome(g); break;
+      case 'SCATTER':
+      case 'CHASE':
+        if (g.inHouse && g.state !== 'eyes') g.released = true;   // walks out, then follows the mode
+        if (g.state !== 'eyes') g.state = 'normal';
+        g.manualMode = to.toLowerCase();
+        break;
+      case 'EVADE': g.state = 'frightened'; g.eatenThisFright = false; break;
+      case 'DEAD': g.state = 'eyes'; g.inHouse = false; g.entering = false; break;
+    }
+  }
+  // Raise an event for a ghost: the first matching transition in ghost-fsm.yaml is applied.
+  function fsmEvent(g, event) {
+    const from = ghostLabel(g);
+    for (const tr of CFG.fsm.transitions) {
+      if (tr.event !== event) continue;
+      const froms = Array.isArray(tr.from) ? tr.from : [tr.from];
+      if (!froms.includes(from)) continue;
+      if (tr.to != null) {
+        const to = tr.to === 'mode' ? currentModeLabel(g) : tr.to;
+        if (to !== from) setGhostState(g, to);
+      }
+      if (tr.frightened === true && g.state === 'normal') g.state = 'frightened';
+      if (tr.frightened === false && g.state === 'frightened') g.state = 'normal';
+      if (tr.reverse && g.dir !== DIR.none) g.dir = reverse(g.dir);
+      return tr;
+    }
+    return null;
+  }
+
+  let maze = [];
+  let pelletsLeft = 0;
+  let score = 0;
+  let highScore = 0;
+  let lives = 3;
+  let level = 1;
+  let pelletCounter = 0;
+  let frightenedTimer = 0;
+  let frightenedChain = 0;
+  let frightenedScorePopup = null;
+  let modeIndex = 0;
+  let modeTimer = 0;
+  let globalMode = MODE_SCHEDULE[0].mode;
+  // Manual control ("0"): timed changes stop, keys 1-4 step each ghost's state. TAB: state bubbles.
+  let manualMode = false;
+  let showBubbles = false;
+  // Ghost house: four places side by side on the middle row; the door column is x = 108.
+  const HOUSE_Y = 132;                 // centre of row 16, the middle row of the house
+  const HOUSE_DOOR_X = 108;            // centre of column 13
+  const HOUSE_EXIT_Y = 108;            // centre of row 13, just above the door
+  const HOUSE_BOB = 3;                 // waiting ghosts bob up and down by +-3 px, like the arcade
+  const HOME_X = { inky: 92, pinky: 103, blinky: 113, clyde: 124 };
+  function putHome(g) {
+    g.x = HOME_X[g.name]; g.y = HOUSE_Y;
+    g.state = 'normal'; g.inHouse = true; g.entering = false; g.released = !manualMode;
+    g.dir = DIR.up; g.decided = null; g.manualMode = 'scatter'; g.flash = false;
+  }
+  function ghostMode(g) { return manualMode ? g.manualMode : globalMode; }
+  let readyTimer = 0;
+  let deathTimer = 0;
+  let gameOver = false;
+  let levelClearTimer = 0;
+  let flashTimer = 0;
+  let fruit = null;
+  let fruitAward = null;
+  let fruitSpawned7 = false;
+  let fruitSpawned17 = false;
+  let lastTimestamp = 0;
+  let accumulator = 0;
+  let eatPauseTimer = 0;      // everything but returning eyes waits while the ghost score is shown
+  let testNoDeath = false;    // used by the autotests
+
+  const input = { desired: DIR.left };
+
+  const pacman = {
+    kind: 'pacman',
+    x: 0,
+    y: 0,
+    dir: DIR.left,
+    mouthPhase: 0,
+    deathPhase: 0,
+    freezeTimer: 0
+  };
+
+  const ghosts = [];
+
+  function copyMaze() {
+    maze = [];
+    for (let y = 0; y < ROWS; y++) {
+      maze[y] = [];
+      for (let x = 0; x < COLS; x++) maze[y][x] = LEVEL1[y][x];
+    }
+  }
+
+  function recountPellets() {
+    pelletsLeft = 0;
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        if (maze[y][x] === '.' || maze[y][x] === 'o') pelletsLeft++;
+      }
+    }
+  }
+
+  function tileAt(tx, ty) {
+    if (ty < 0 || ty >= ROWS) return '#';
+    if (tx < 0 || tx >= COLS) return ' ';
+    return maze[ty][tx];
+  }
+
+  function setTile(tx, ty, v) {
+    if (tx < 0 || tx >= COLS || ty < 0 || ty >= ROWS) return;
+    maze[ty][tx] = v;
+  }
+
+  function isWall(tx, ty) {
+    return tileAt(tx, ty) === '#';
+  }
+
+  function isDoor(tx, ty) {
+    return tileAt(tx, ty) === '-';
+  }
+
+  function pixelCenter(tx, ty) {
+    return { x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 };
+  }
+
+  function tileOf(entity) {
+    return { tx: Math.floor(entity.x / TILE), ty: Math.floor(entity.y / TILE) };
+  }
+
+  function aligned(entity) {
+    return Math.round(entity.x - TILE / 2) % TILE === 0 && Math.round(entity.y - TILE / 2) % TILE === 0;
+  }
+
+  function snap(entity) {
+    const t = tileOf(entity);
+    const p = pixelCenter(t.tx, t.ty);
+    entity.x = p.x;
+    entity.y = p.y;
+  }
+
+  function reverse(dir) {
+    if (dir === DIR.left) return DIR.right;
+    if (dir === DIR.right) return DIR.left;
+    if (dir === DIR.up) return DIR.down;
+    if (dir === DIR.down) return DIR.up;
+    return DIR.none;
+  }
+
+  function distSq(ax, ay, bx, by) {
+    const dx = ax - bx;
+    const dy = ay - by;
+    return dx * dx + dy * dy;
+  }
+
+  function wrapX(x) {
+    if (x < -TILE / 2) return WIDTH + TILE / 2;
+    if (x > WIDTH + TILE / 2) return -TILE / 2;
+    return x;
+  }
+
+  function nextTile(tx, ty, dir) {
+    let nx = tx + dir.x;
+    let ny = ty + dir.y;
+    if (nx < 0) nx = COLS - 1;
+    if (nx >= COLS) nx = 0;
+    return { tx: nx, ty: ny };
+  }
+
+  function isTunnelTile(tx, ty) {
+    return ty === 16 && (tx <= 5 || tx >= 22);
+  }
+
+  function isWalkable(tx, ty, dir, actor) {
+    let nx = tx + dir.x;
+    const ny = ty + dir.y;
+    if (nx < 0 || nx >= COLS) return ny === 16 && dir.y === 0;
+    if (isWall(nx, ny)) return false;
+    if (isDoor(nx, ny)) {
+      if (actor.kind === 'pacman') return false;
+      if (actor.state === 'eyes') return true;
+      if (actor.inHouse) return dir === DIR.up;
+      return false;
+    }
+    return true;
+  }
+
+  function addScore(n) {
+    score += n;
+    if (score > highScore) highScore = score;
+  }
+
+  function fruitScoreForLevel() {
+    return 100;
+  }
+
+  function frightenedSecondsForLevel() {
+    return CFG.fsm.fright_seconds;
+  }
+
+  function makeGhost(name, color, tx, ty, dir, releaseDots) {
+    const p = pixelCenter(tx, ty);
+    return {
+      kind: 'ghost',
+      name,
+      color,
+      x: p.x,
+      y: p.y,
+      dir,
+      state: 'normal',
+      released: false,
+      inHouse: CFG.fsm.ghosts[name].start === 'HOME',
+      releaseDots,
+      flash: false,
+      eatenThisFright: false
+    };
+  }
+
+  function resetGhosts() {
+    ghosts.length = 0;
+    const G = CFG.fsm.ghosts;
+    ghosts.push(makeGhost('blinky', '#ff2d2d', 13, 13, DIR.left, G.blinky.release_dots));
+    ghosts.push(makeGhost('pinky',  '#ffb8ff', 13, 17, DIR.up,   G.pinky.release_dots));
+    ghosts.push(makeGhost('inky',   '#00ffff', 11, 17, DIR.up,   G.inky.release_dots));
+    ghosts.push(makeGhost('clyde',  '#ffb852', 15, 17, DIR.up,   G.clyde.release_dots));
+    for (const g of ghosts) {
+      g.manualMode = globalMode;
+      g.entering = false;
+      g.decided = null;
+      if (g.inHouse) { g.x = HOME_X[g.name]; g.y = HOUSE_Y; }
+      else { const s = String(G[g.name].start).toLowerCase(); if (s === 'scatter' || s === 'chase') g.manualMode = s; }
+      // ghosts that need no dots leave the house straight away (FSM event "released")
+      if (g.inHouse && !manualMode && g.releaseDots === 0) fsmEvent(g, 'released');
+    }
+  }
+
+  function resetPacman() {
+    const p = pixelCenter(13, 25);
+    pacman.x = p.x;
+    pacman.y = p.y;
+    pacman.dir = DIR.left;
+    pacman.mouthPhase = 0;
+    pacman.deathPhase = 0;
+    pacman.freezeTimer = 0;
+    pacman.pauseFrames = 0;
+    input.desired = DIR.left;
+  }
+
+  function resetRound(resetMode) {
+    resetPacman();
+    resetGhosts();
+    frightenedTimer = 0;
+    frightenedChain = 0;
+    frightenedScorePopup = null;
+    readyTimer = 2;
+    deathTimer = 0;
+    levelClearTimer = 0;
+    flashTimer = 0;
+    fruit = null;
+    fruitAward = null;
+    if (resetMode) {
+      modeIndex = 0;
+      modeTimer = 0;
+      globalMode = MODE_SCHEDULE[0].mode;
+    }
+  }
+
+  function startGame() {
+    score = 0;
+    lives = 3;
+    level = 1;
+    gameOver = false;
+    copyMaze();
+    recountPellets();
+    pelletCounter = 0;
+    fruitSpawned7 = false;
+    fruitSpawned17 = false;
+    resetRound(true);
+  }
+
+  function startLevel() {
+    copyMaze();
+    recountPellets();
+    pelletCounter = 0;
+    fruitSpawned7 = false;
+    fruitSpawned17 = false;
+    resetRound(true);
+  }
+
+  function startNextLevel() {
+    level++;
+    startLevel();
+  }
+
+  function spawnFruit() {
+    if (fruit) return;
+    const p = pixelCenter(13, 19);
+    fruit = { x: p.x, y: p.y, timer: 9 };
+  }
+
+  function maybeSpawnFruit() {
+    if (!fruitSpawned7 && pelletCounter >= 70) {
+      fruitSpawned7 = true;
+      spawnFruit();
+    }
+    if (!fruitSpawned17 && pelletCounter >= 170) {
+      fruitSpawned17 = true;
+      spawnFruit();
+    }
+  }
+
+  function releaseGhostsFromDots() {
+    for (let i = 0; i < ghosts.length; i++) {
+      const g = ghosts[i];
+      if (!manualMode && g.inHouse && !g.released && g.state !== 'eyes' && pelletCounter >= g.releaseDots) fsmEvent(g, 'released');
+    }
+  }
+
+  function triggerFrightened() {
+    frightenedTimer = frightenedSecondsForLevel();
+    frightenedChain = 0;
+    frightenedScorePopup = null;
+    for (let i = 0; i < ghosts.length; i++) {
+      ghosts[i].eatenThisFright = false;
+      fsmEvent(ghosts[i], 'energizer');
+    }
+  }
+
+  function updateMode(dt) {
+    if (manualMode) return;
+    if (readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || frightenedTimer > 0 || eatPauseTimer > 0 || gameOver) return;
+    modeTimer += dt;
+    const slot = MODE_SCHEDULE[modeIndex];
+    if (modeTimer >= slot.seconds) {
+      modeTimer = 0;
+      if (modeIndex < MODE_SCHEDULE.length - 1) modeIndex++;
+      globalMode = MODE_SCHEDULE[modeIndex].mode;
+      for (let i = 0; i < ghosts.length; i++) fsmEvent(ghosts[i], 'mode_change');
+    }
+  }
+
+  function pacmanSpeed() {
+    const p = CFG.sp.pacman;
+    return (frightenedTimer > 0 ? p.frightened : p.normal) * CFG.unit;
+  }
+
+  // speed by FSM state (ghost-fsm.yaml: states.X.speed) and the speed table (pacman-speeds.yaml)
+  function ghostSpeed(g) {
+    const sp = CFG.sp, u = CFG.unit;
+    const kind = CFG.fsm.states[ghostLabel(g)].speed;
+    const t = tileOf(g);
+    const tunnel = isTunnelTile(t.tx, t.ty);
+    if (kind === 'eyes') return sp.ghost.eyes * u;
+    if (kind === 'house') return sp.ghost.house * u;
+    if (kind === 'frightened') return (tunnel ? sp.ghost.frightened_tunnel : sp.ghost.frightened) * u;
+    if (tunnel) return sp.ghost.tunnel * u;
+    if (g.name === 'blinky' && sp.blinky) {
+      const b = sp.blinky;
+      let s = b.normal;
+      if (b.elroy1 && pelletsLeft <= b.elroy1.dots_left) s = b.elroy1.speed;
+      if (b.elroy2 && pelletsLeft <= b.elroy2.dots_left) s = b.elroy2.speed;
+      return s * u;
+    }
+    return sp.ghost.normal * u;
+  }
+
+  function moveByDirection(entity, speed) {
+    if (entity.dir === DIR.none) return;
+    const t = tileOf(entity);
+    if (!isWalkable(t.tx, t.ty, entity.dir, entity)) {
+      const p = pixelCenter(t.tx, t.ty);
+      entity.x = p.x;
+      entity.y = p.y;
+      if (entity.kind === 'pacman') entity.dir = DIR.none;
+      return;
+    }
+    entity.x += entity.dir.x * speed;
+    entity.y += entity.dir.y * speed;
+    entity.x = wrapX(entity.x);
+  }
+
+  function eatTileUnderPacman() {
+    const t = tileOf(pacman);
+    const cell = tileAt(t.tx, t.ty);
+    if (cell === '.') {
+      setTile(t.tx, t.ty, ' ');
+      pelletsLeft--;
+      pelletCounter++;
+      addScore(10);
+      pacman.pauseFrames = CFG.sp.pacman.dot_pause_frames;
+      releaseGhostsFromDots();
+      maybeSpawnFruit();
+    } else if (cell === 'o') {
+      setTile(t.tx, t.ty, ' ');
+      pelletsLeft--;
+      pelletCounter++;
+      addScore(50);
+      pacman.pauseFrames = CFG.sp.pacman.energizer_pause_frames;
+      releaseGhostsFromDots();
+      maybeSpawnFruit();
+      triggerFrightened();
+    }
+    if (pelletsLeft <= 0 && levelClearTimer <= 0) {
+      levelClearTimer = 2.2;
+      flashTimer = 0;
+    }
+  }
+
+  function updatePacman() {
+    if (readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || gameOver) return;
+    if (pacman.freezeTimer > 0) return;
+    if (pacman.pauseFrames > 0) { pacman.pauseFrames--; return; }
+
+    // reversing is allowed at any time, not only on a tile centre
+    if (pacman.dir !== DIR.none && input.desired === reverse(pacman.dir)) pacman.dir = input.desired;
+
+    if (aligned(pacman)) {
+      snap(pacman);
+      const t = tileOf(pacman);
+      if (isWalkable(t.tx, t.ty, input.desired, pacman)) pacman.dir = input.desired;
+      if (!isWalkable(t.tx, t.ty, pacman.dir, pacman)) pacman.dir = DIR.none;
+      eatTileUnderPacman();
+    }
+
+    moveByDirection(pacman, pacmanSpeed());
+    pacman.mouthPhase += 0.22;
+  }
+
+  // target by FSM state (ghost-fsm.yaml: states.X.target)
+  function ghostTarget(g) {
+    const kind = CFG.fsm.states[ghostLabel(g)].target;
+    if (kind === 'house_door') return { x: 13, y: 13 };
+    if (kind === 'none' || kind === 'random') return null;
+    if (kind === 'scatter_corner') return SCATTER_TARGET[g.name];
+
+    const pt = tileOf(pacman);
+
+    if (g.name === 'blinky') return { x: pt.tx, y: pt.ty };
+
+    if (g.name === 'pinky') {
+      let x = pt.tx;
+      let y = pt.ty;
+      if (pacman.dir === DIR.up) {
+        x -= 4;
+        y -= 4;
+      } else {
+        x += pacman.dir.x * 4;
+        y += pacman.dir.y * 4;
+      }
+      return { x, y };
+    }
+
+    if (g.name === 'inky') {
+      const bt = tileOf(ghosts[0]);
+      let px = pt.tx;
+      let py = pt.ty;
+      if (pacman.dir === DIR.up) {
+        px -= 2;
+        py -= 2;
+      } else {
+        px += pacman.dir.x * 2;
+        py += pacman.dir.y * 2;
+      }
+      return { x: px + (px - bt.tx), y: py + (py - bt.ty) };
+    }
+
+    if (g.name === 'clyde') {
+      const gt = tileOf(g);
+      if (distSq(gt.tx, gt.ty, pt.tx, pt.ty) >= 64) return { x: pt.tx, y: pt.ty };
+      return SCATTER_TARGET.clyde;
+    }
+
+    return { x: pt.tx, y: pt.ty };
+  }
+
+  function chooseGhostDirection(g) {
+    const t = tileOf(g);
+    const rev = reverse(g.dir);
+    const options = [];
+
+    for (let i = 0; i < TURN_PRIORITY.length; i++) {
+      const d = TURN_PRIORITY[i];
+      if (d === rev) continue;
+      if (isWalkable(t.tx, t.ty, d, g)) options.push(d);
+    }
+
+    if (options.length === 0) {
+      if (isWalkable(t.tx, t.ty, rev, g)) g.dir = rev;
+      return;
+    }
+
+    if (g.state === 'frightened') {
+      g.dir = options[Math.floor(Math.random() * options.length)];
+      return;
+    }
+
+    const target = ghostTarget(g) || { x: 13, y: 13 };
+
+    let best = options[0];
+    let bestD = Infinity;
+    for (let i = 0; i < options.length; i++) {
+      const d = options[i];
+      const n = nextTile(t.tx, t.ty, d);
+      const dd = distSq(n.tx, n.ty, target.x, target.y);
+      if (dd < bestD) {
+        bestD = dd;
+        best = d;
+      }
+    }
+    g.dir = best;
+  }
+
+  // Movement inside the ghost house (not on the tile grid).
+  //  - waiting: bob up and down on the spot
+  //  - released: back to the middle row, over to the door column, then up and out
+  //  - returning eyes: down through the door, over to the home place, revive
+  function moveTowards(g, tx, ty, rem) {
+    const dx = tx - g.x, dy = ty - g.y, d = Math.abs(dx) + Math.abs(dy);
+    if (d <= rem) { g.x = tx; g.y = ty; return rem - d; }
+    if (dx !== 0) { const s = Math.min(Math.abs(dx), rem); g.x += Math.sign(dx) * s; g.dir = dx > 0 ? DIR.right : DIR.left; rem -= s; }
+    else { const s = Math.min(Math.abs(dy), rem); g.y += Math.sign(dy) * s; g.dir = dy > 0 ? DIR.down : DIR.up; rem -= s; }
+    return rem;
+  }
+  function moveInHouse(g, speed) {
+    let rem = speed;
+    if (g.state === 'eyes') {                       // returning: door -> middle row -> home place
+      if (g.y < HOUSE_Y) { rem = moveTowards(g, HOUSE_DOOR_X, HOUSE_Y, rem); }
+      if (rem > 0 && g.y === HOUSE_Y) rem = moveTowards(g, HOME_X[g.name], HOUSE_Y, rem);
+      if (g.x === HOME_X[g.name] && g.y === HOUSE_Y) { if (!fsmEvent(g, 'arrived_home')) putHome(g); }
+      return;
+    }
+    if (!g.released) {                              // waiting: bob on the spot
+      if (g.dir !== DIR.up && g.dir !== DIR.down) g.dir = DIR.up;
+      g.x = HOME_X[g.name];
+      g.y += g.dir.y * rem;
+      if (g.y <= HOUSE_Y - HOUSE_BOB) { g.y = HOUSE_Y - HOUSE_BOB; g.dir = DIR.down; }
+      else if (g.y >= HOUSE_Y + HOUSE_BOB) { g.y = HOUSE_Y + HOUSE_BOB; g.dir = DIR.up; }
+      return;
+    }
+    // released: leave the house
+    if (g.x !== HOUSE_DOOR_X) {
+      if (g.y !== HOUSE_Y) rem = moveTowards(g, g.x, HOUSE_Y, rem);
+      if (rem > 0) rem = moveTowards(g, HOUSE_DOOR_X, HOUSE_Y, rem);
+    }
+    if (rem > 0 && g.x === HOUSE_DOOR_X) rem = moveTowards(g, HOUSE_DOOR_X, HOUSE_EXIT_Y, rem);
+    if (g.x === HOUSE_DOOR_X && g.y === HOUSE_EXIT_Y) {
+      g.inHouse = false;
+      g.dir = DIR.left;
+      g.decided = null;
+    }
+  }
+
+  // Decide what to do at a tile centre. Returns false if the ghost must stop this frame.
+  function decideAtCenter(g, t) {
+    if (g.state === 'eyes') {
+      if (t.tx === 13 && t.ty === 13) {                                    // above the door: go in
+        g.inHouse = true; g.entering = true;
+        return false;
+      }
+      chooseGhostDirection(g);
+      return true;
+    }
+    chooseGhostDirection(g);
+    return true;
+  }
+
+  // Move a ghost by `speed` pixels along the corridor grid. It always stops exactly on
+  // each tile centre it passes, decides there once, then carries on with the remaining distance.
+  function moveGhost(g, speed) {
+    let remaining = speed;
+    let guard = 0;
+    while (remaining > 1e-6 && guard++ < 16) {
+      const t = tileOf(g);
+      const c = pixelCenter(t.tx, t.ty);
+      const atCenter = Math.abs(g.x - c.x) < 1e-6 && Math.abs(g.y - c.y) < 1e-6;
+      if (atCenter) {
+        g.x = c.x; g.y = c.y;
+        const key = t.tx + ',' + t.ty;
+        const blocked = g.dir === DIR.none || !isWalkable(t.tx, t.ty, g.dir, g);
+        if (g.decided !== key || blocked) {
+          g.decided = key;
+          if (!decideAtCenter(g, t)) return;
+        }
+        if (g.dir === DIR.none || !isWalkable(t.tx, t.ty, g.dir, g)) return;
+      }
+      if (g.dir === DIR.none) return;
+      // distance to the next tile centre along the heading
+      const along = g.dir.x !== 0 ? (c.x - g.x) * g.dir.x : (c.y - g.y) * g.dir.y;
+      const dist = along > 1e-6 ? along : along + TILE;
+      const stepLen = Math.min(dist, remaining);
+      g.x += g.dir.x * stepLen;
+      g.y += g.dir.y * stepLen;
+      // keep the cross-axis on the corridor centre line
+      if (g.dir.x !== 0) g.y = c.y; else g.x = c.x;
+      remaining -= stepLen;
+      // land exactly on the centre (avoids floating point drift)
+      const t2 = tileOf(g), c2 = pixelCenter(t2.tx, t2.ty);
+      if (Math.abs(g.x - c2.x) < 1e-6) g.x = c2.x;
+      if (Math.abs(g.y - c2.y) < 1e-6) g.y = c2.y;
+      // tunnel wrap
+      if (g.x < -TILE / 2) { g.x += WIDTH + TILE; g.decided = null; }
+      else if (g.x > WIDTH + TILE / 2) { g.x -= WIDTH + TILE; g.decided = null; }
+    }
+  }
+
+  function updateGhost(g) {
+    if (readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || gameOver) return;
+
+    if (g.state === 'frightened') {
+      g.flash = !manualMode && frightenedTimer < 2 && Math.floor(frightenedTimer * 10) % 2 === 0;
+    } else {
+      g.flash = false;
+    }
+
+    if (eatPauseTimer > 0 && g.state !== 'eyes') return;
+    if (g.inHouse) moveInHouse(g, ghostSpeed(g));
+    else moveGhost(g, ghostSpeed(g));
+  }
+
+  function ghostLabel(g) {
+    if (g.state === 'eyes') return 'DEAD';
+    if (g.inHouse) return 'HOME';
+    if (g.state === 'frightened') return 'EVADE';
+    return ghostMode(g) === 'scatter' ? 'SCATTER' : 'CHASE';
+  }
+
+  function toggleManual() {
+    manualMode = !manualMode;
+    if (manualMode) {
+      for (const g of ghosts) putHome(g);
+    } else {
+      // back to the rules: a manually frightened ghost gets a normal fright timer,
+      // ghosts waiting at home are released by the dot counters again
+      if (frightenedTimer <= 0 && ghosts.some(g => g.state === 'frightened')) {
+        frightenedTimer = frightenedSecondsForLevel();
+      }
+      releaseGhostsFromDots();
+    }
+  }
+
+  // Manual mode: next state from ghost-fsm.yaml manual_cycle
+  function stepGhostState(i) {
+    const g = ghosts[i];
+    if (!g) return;
+    const cycle = CFG.fsm.manual_cycle;
+    const from = ghostLabel(g);
+    const to = cycle[(cycle.indexOf(from) + 1) % cycle.length];
+    const moving = ['SCATTER', 'CHASE', 'EVADE'];
+    setGhostState(g, to);
+    if (moving.includes(from) && moving.includes(to) && g.dir !== DIR.none) g.dir = reverse(g.dir);
+  }
+
+  function drawBubbles() {
+    if (!showBubbles) return;
+    ctx.save();
+
+    for (let i = 0; i < ghosts.length; i++) {
+      const g = ghosts[i];
+      const label = ghostLabel(g);
+      const w = label.length * 4.5 + 3, h = 8;
+      let bx = Math.max(1, Math.min(WIDTH - w - 1, g.x - w / 2));
+      let by = g.y - 9 - h;
+      let tail = 1;
+      if (g.inHouse && g.state !== 'eyes' && i % 2 === 1) { by = g.y + 9; tail = -1; }
+      if (by < 1) { by = g.y + 9; tail = -1; }
+      // bubble
+      ctx.fillStyle = 'rgba(0,0,0,0.82)';
+      ctx.strokeStyle = g.color;
+      ctx.lineWidth = 0.6;
+      ctx.beginPath();
+      ctx.roundRect(bx, by, w, h, 2);
+      ctx.fill(); ctx.stroke();
+      // pointer
+      const px = Math.max(bx + 2, Math.min(bx + w - 2, g.x));
+      const py = tail > 0 ? by + h : by;
+      ctx.beginPath();
+      ctx.moveTo(px - 1.5, py); ctx.lineTo(px, py + 2.5 * tail); ctx.lineTo(px + 1.5, py);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      arcadeText(label, bx + w / 2 + 0.3, by + 2.1, CFG.fsm.states[label].color, 4.5, 'center');
+    }
+    ctx.restore();
+  }
+
+  function updateFruit(dt) {
+    if (!fruit) return;
+    fruit.timer -= dt;
+    if (fruit.timer <= 0) fruit = null;
+  }
+
+  function collide() {
+    if (readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || gameOver) return;
+
+    if (fruit) {
+      if (distSq(pacman.x, pacman.y, fruit.x, fruit.y) < 36) {
+        const pts = fruitScoreForLevel();
+        addScore(pts);
+        fruitAward = { x: fruit.x, y: fruit.y, text: String(pts), timer: 1.1 };
+        fruit = null;
+      }
+    }
+
+    for (let i = 0; i < ghosts.length; i++) {
+      const g = ghosts[i];
+      if (g.inHouse) continue;
+      if (distSq(pacman.x, pacman.y, g.x, g.y) < 36) {
+        const tr = fsmEvent(g, 'touch');
+        if (!tr) continue;
+        if (tr.action === 'score_ghost') {
+          g.eatenThisFright = true;
+          const pts = EAT_GHOST_SCORES[Math.min(frightenedChain, 3)];
+          frightenedChain++;
+          addScore(pts);
+          frightenedScorePopup = { x: g.x, y: g.y, text: String(pts), timer: 1.0 };
+          pacman.freezeTimer = 0.35;
+          eatPauseTimer = 0.35;
+          return;
+        }
+        if (tr.action === 'kill_pacman' && !testNoDeath) {
+          deathTimer = 1.7;
+          pacman.deathPhase = 0;
+          return;
+        }
+      }
+    }
+  }
+
+  function updateTimers(dt) {
+    if (readyTimer > 0) {
+      readyTimer -= dt;
+      if (readyTimer < 0) readyTimer = 0;
+    }
+
+    if (eatPauseTimer > 0) eatPauseTimer = Math.max(0, eatPauseTimer - dt);
+    if (pacman.freezeTimer > 0) {
+      pacman.freezeTimer -= dt;
+      if (pacman.freezeTimer < 0) pacman.freezeTimer = 0;
+    }
+
+    if (frightenedTimer > 0 && !manualMode && eatPauseTimer <= 0) {
+      frightenedTimer -= dt;
+      if (frightenedTimer <= 0) {
+        frightenedTimer = 0;
+        frightenedChain = 0;
+        for (let i = 0; i < ghosts.length; i++) fsmEvent(ghosts[i], 'fright_end');
+      }
+    }
+
+    if (deathTimer > 0) {
+      deathTimer -= dt;
+      pacman.deathPhase += dt * 2.8;
+      if (deathTimer <= 0) {
+        deathTimer = 0;
+        lives--;
+        if (lives <= 0) gameOver = true;
+        else resetRound(false);
+      }
+    }
+
+    if (levelClearTimer > 0) {
+      levelClearTimer -= dt;
+      flashTimer += dt;
+      if (levelClearTimer <= 0) startNextLevel();
+    }
+
+    if (frightenedScorePopup) {
+      frightenedScorePopup.timer -= dt;
+      if (frightenedScorePopup.timer <= 0) frightenedScorePopup = null;
+    }
+
+    if (fruitAward) {
+      fruitAward.timer -= dt;
+      if (fruitAward.timer <= 0) fruitAward = null;
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  //  8-bit arcade bitmap font: 7x7 glyphs in an 8x8 cell, drawn as small
+  //  squares so it stays sharp at any screen size.
+  // ---------------------------------------------------------------------
+  const GLYPHS = {
+    'A': ['..###..', '.##.##.', '##...##', '##...##', '#######', '##...##', '##...##'],
+    'B': ['######.', '##...##', '##...##', '######.', '##...##', '##...##', '######.'],
+    'C': ['..####.', '.##..##', '##.....', '##.....', '##.....', '.##..##', '..####.'],
+    'D': ['#####..', '##..##.', '##...##', '##...##', '##...##', '##..##.', '#####..'],
+    'E': ['#######', '##.....', '##.....', '######.', '##.....', '##.....', '#######'],
+    'F': ['#######', '##.....', '##.....', '######.', '##.....', '##.....', '##.....'],
+    'G': ['..#####', '.##....', '##.....', '##..###', '##...##', '.##..##', '..#####'],
+    'H': ['##...##', '##...##', '##...##', '#######', '##...##', '##...##', '##...##'],
+    'I': ['.######', '...##..', '...##..', '...##..', '...##..', '...##..', '.######'],
+    'J': ['....###', '.....##', '.....##', '.....##', '##...##', '##...##', '.#####.'],
+    'K': ['##...##', '##..##.', '##.##..', '####...', '#####..', '##.###.', '##..###'],
+    'L': ['.##....', '.##....', '.##....', '.##....', '.##....', '.##....', '.######'],
+    'M': ['##...##', '###.###', '#######', '#######', '##.#.##', '##...##', '##...##'],
+    'N': ['##...##', '###..##', '####.##', '#######', '##.####', '##..###', '##...##'],
+    'O': ['.#####.', '##...##', '##...##', '##...##', '##...##', '##...##', '.#####.'],
+    'P': ['######.', '##...##', '##...##', '##...##', '######.', '##.....', '##.....'],
+    'Q': ['.#####.', '##...##', '##...##', '##...##', '##.####', '##..##.', '.####.#'],
+    'R': ['######.', '##...##', '##...##', '##..###', '#####..', '##.###.', '##..###'],
+    'S': ['.####..', '##..##.', '##.....', '.#####.', '.....##', '##...##', '.#####.'],
+    'T': ['######.', '..##...', '..##...', '..##...', '..##...', '..##...', '..##...'],
+    'U': ['##...##', '##...##', '##...##', '##...##', '##...##', '##...##', '.#####.'],
+    'V': ['##...##', '##...##', '##...##', '###.###', '.#####.', '..###..', '...#...'],
+    'W': ['##...##', '##...##', '##.#.##', '#######', '#######', '###.###', '##...##'],
+    'X': ['##...##', '###.###', '.#####.', '..###..', '.#####.', '###.###', '##...##'],
+    'Y': ['##..##.', '##..##.', '##..##.', '.####..', '..##...', '..##...', '..##...'],
+    'Z': ['#######', '....###', '...###.', '..###..', '.###...', '###....', '#######'],
+    '0': ['..###..', '.#..##.', '##...##', '##...##', '##...##', '.##..#.', '..###..'],
+    '1': ['...##..', '..###..', '...##..', '...##..', '...##..', '...##..', '.######'],
+    '2': ['.#####.', '##...##', '....###', '..####.', '.####..', '###....', '#######'],
+    '3': ['.######', '....##.', '...##..', '..####.', '.....##', '##...##', '.#####.'],
+    '4': ['...###.', '..####.', '.##.##.', '##..##.', '#######', '....##.', '....##.'],
+    '5': ['######.', '##.....', '######.', '.....##', '.....##', '##...##', '.#####.'],
+    '6': ['..####.', '.##....', '##.....', '######.', '##...##', '##...##', '.#####.'],
+    '7': ['#######', '##...##', '....##.', '...##..', '..##...', '..##...', '..##...'],
+    '8': ['.####..', '##...#.', '###..#.', '.####..', '#..####', '#....##', '.#####.'],
+    '9': ['.#####.', '##...##', '##...##', '.######', '.....##', '....##.', '.####..'],
+    '!': ['..###..', '..###..', '..###..', '..##...', '..##...', '.......', '..##...'],
+    '-': ['.......', '.......', '.......', '.#####.', '.......', '.......', '.......'],
+    '.': ['.......', '.......', '.......', '.......', '.......', '..##...', '..##...'],
+    ':': ['.......', '..##...', '..##...', '.......', '..##...', '..##...', '.......'],
+    '/': ['......#', '.....##', '....##.', '...##..', '..##...', '.##....', '##.....'],
+    '"': ['.##.##.', '.##.##.', '.#..#..', '.......', '.......', '.......', '.......'],
+    '>': ['.##....', '..##...', '...##..', '....##.', '...##..', '..##...', '.##....'],
+    '?': ['.#####.', '##...##', '....###', '...###.', '..##...', '.......', '..##...'],
+    ' ': ['.......', '.......', '.......', '.......', '.......', '.......', '.......']
+  };
+
+  // Draw text with the arcade font. size = cell size in game pixels (8 = original).
+  // align: 'left' | 'center' | 'right' relative to x.
+  // Letters are drawn with scanlines: every pixel row of a glyph is only partly filled,
+  // leaving a dark line below it, like on an arcade monitor. TEXT_SCANLINE = filled part (1 = solid).
+  const TEXT_SCANLINE = 1;
+  function arcadeText(str, x, y, color, size = 8, align = 'left') {
+    str = String(str).toUpperCase();
+    const px = size / 8;
+    // row height snapped to whole canvas pixels so the lines stay crisp
+    const rowH = Math.max(1, Math.round(px * textScale * TEXT_SCANLINE)) / textScale;
+    const w = str.length * size;
+    let x0 = align === 'center' ? x - w / 2 : align === 'right' ? x - w : x;
+    tctx.fillStyle = color;
+    for (let i = 0; i < str.length; i++) {
+      const g = GLYPHS[str[i]] || GLYPHS['?'];
+      for (let r = 0; r < 7; r++) {
+        const row = g[r];
+        let c = 0;
+        while (c < 7) {
+          if (row[c] !== '#') { c++; continue; }
+          let e = c; while (e < 7 && row[e] === '#') e++;
+          tctx.fillRect(x0 + i * size + c * px, y + r * px, (e - c) * px + 0.02, TEXT_SCANLINE >= 1 ? px + 0.02 : rowH);
+          c = e;
+        }
+      }
+    }
+    return w;
+  }
+
+  // ---------------------------------------------------------------------
+  //  Maze walls in the arcade look: thin rounded lines drawn 3 px inside
+  //  the wall tiles, so single-thick walls (house, borders) become double
+  //  lines; the outer border gets a second line further out.
+  // ---------------------------------------------------------------------
+  let wallPaths = null;
+  function buildWallPaths() {
+    const W = WIDTH, H = HEIGHT;
+    // tiles Pac-Man can reach; open tiles he can't reach (outside the maze) count as wall,
+    // except the ghost house interior
+    const reach = new Set(['13,25']); const q = [[13, 25]];
+    while (q.length) {
+      const [x, y] = q.shift();
+      for (const d of TURN_PRIORITY) {
+        if (!isWalkable(x, y, d, pacman)) continue;
+        let nx = x + d.x; const ny = y + d.y;
+        if (nx < 0) nx = COLS - 1; if (nx >= COLS) nx = 0;
+        const k = nx + ',' + ny; if (!reach.has(k)) { reach.add(k); q.push([nx, ny]); }
+      }
+    }
+    const isHouse = (tx, ty) => ty >= 15 && ty <= 17 && tx >= 11 && tx <= 16;
+    const wallTile = (tx, ty) => {
+      if (ty === 16 && (tx < 0 || tx >= COLS)) return false;   // tunnel mouths stay open
+      if (tx < 0 || tx >= COLS || ty < 0 || ty >= ROWS) return true;
+      const c = LEVEL1[ty][tx];
+      if (c === '#') return true;
+      if (c === '-') return false;
+      return !reach.has(tx + ',' + ty) && !isHouse(tx, ty);
+    };
+    // outer component: wall tiles connected to the screen border
+    const outer = new Set(); const oq = [];
+    for (let ty = 0; ty < ROWS; ty++) for (let tx = 0; tx < COLS; tx++)
+      if ((tx === 0 || ty === 0 || tx === COLS - 1 || ty === ROWS - 1) && wallTile(tx, ty)) { outer.add(tx + ',' + ty); oq.push([tx, ty]); }
+    while (oq.length) {
+      const [x, y] = oq.shift();
+      for (const d of TURN_PRIORITY) {
+        const nx = x + d.x, ny = y + d.y, k = nx + ',' + ny;
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS || outer.has(k) || !wallTile(nx, ny)) continue;
+        outer.add(k); oq.push([nx, ny]);
+      }
+    }
+    // Pixel masks on a padded canvas: around the screen there is an 8 px margin of wall
+    // (open only at the tunnel mouths), and beyond the margin everything is open,
+    // so every outline closes into a loop off-screen.
+    const M = 8, PW = W + 2 * M, PH = H + 2 * M;
+    const tunnelY = (y) => y >= 16 * TILE && y < 17 * TILE;
+    function mask(pred) {
+      const m = new Uint8Array(PW * PH);
+      for (let py = 0; py < PH; py++) for (let px = 0; px < PW; px++) {
+        const x = px - M, y = py - M;
+        let v;
+        if (x >= 0 && y >= 0 && x < W && y < H) v = pred(Math.floor(x / TILE), Math.floor(y / TILE));
+        else v = !tunnelY(y);
+        m[py * PW + px] = v ? 1 : 0;
+      }
+      return m;
+    }
+    const at = (m, x, y) => (x < 0 || y < 0 || x >= PW || y >= PH) ? 0 : m[y * PW + x];
+    function erode(m, r) {
+      const h = new Uint8Array(PW * PH), out = new Uint8Array(PW * PH);
+      for (let y = 0; y < PH; y++) for (let x = 0; x < PW; x++) {
+        let v = 1; for (let k = -r; k <= r && v; k++) v = at(m, x + k, y); h[y * PW + x] = v;
+      }
+      for (let y = 0; y < PH; y++) for (let x = 0; x < PW; x++) {
+        let v = 1; for (let k = -r; k <= r && v; k++) v = at(h, x, y + k); out[y * PW + x] = v;
+      }
+      return out;
+    }
+    // trace the outline of a pixel mask into closed loops of corner points (screen coordinates)
+    function trace(m) {
+      const inside = (x, y) => at(m, x, y) === 1;
+      const edges = new Map();
+      const add = (x1, y1, x2, y2) => { const k = x1 + ',' + y1; if (!edges.has(k)) edges.set(k, []); edges.get(k).push([x2, y2]); };
+      for (let y = 0; y < PH; y++) for (let x = 0; x < PW; x++) {
+        if (!inside(x, y)) continue;
+        if (!inside(x, y - 1)) add(x, y, x + 1, y);
+        if (!inside(x + 1, y)) add(x + 1, y, x + 1, y + 1);
+        if (!inside(x, y + 1)) add(x + 1, y + 1, x, y + 1);
+        if (!inside(x - 1, y)) add(x, y + 1, x, y);
+      }
+      const loops = [];
+      for (const [start, list] of edges) {
+        while (list.length) {
+          const pts = [start.split(',').map(Number)];
+          let cur = list.pop(), closed = false, guard = 0;
+          while (guard++ < 200000) {
+            pts.push(cur);
+            const k = cur[0] + ',' + cur[1];
+            if (k === start) { closed = true; break; }
+            const nxt = edges.get(k);
+            if (!nxt || !nxt.length) break;
+            cur = nxt.pop();
+          }
+          if (!closed) continue;
+          const n = pts.length - 1, c = [];
+          for (let i = 0; i < n; i++) {
+            const a = pts[(i - 1 + n) % n], b = pts[i], d = pts[i + 1];
+            if ((b[0] - a[0]) * (d[1] - b[1]) - (b[1] - a[1]) * (d[0] - b[0]) !== 0) c.push([b[0] - M, b[1] - M]);
+          }
+          if (c.length >= 4) loops.push(c);
+        }
+      }
+      return loops;
+    }
+    // loops -> Path2D with rounded corners
+    function toPath(loops, radius) {
+      const p = new Path2D();
+      for (const c of loops) {
+        const n = c.length;
+        const len = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]);
+        p.moveTo((c[0][0] + c[1][0]) / 2, (c[0][1] + c[1][1]) / 2);
+        for (let i = 1; i <= n; i++) {
+          const a = c[(i - 1) % n], b = c[i % n], d = c[(i + 1) % n];
+          const r = Math.min(radius, len(a, b) / 2, len(b, d) / 2);
+          p.arcTo(b[0], b[1], d[0], d[1], r);
+        }
+        p.closePath();
+      }
+      return p;
+    }
+    const all = mask(wallTile);
+    const outerOnly = mask((tx, ty) => outer.has(tx + ',' + ty) || (tx < 0 || ty < 0 || tx >= COLS || ty >= ROWS));
+    wallPaths = {
+      inner: toPath(trace(erode(all, 3)), 3),
+      outer: toPath(trace(erode(outerOnly, 6)), 4)
+    };
+  }
+
+  function drawWalls(color) {
+    if (!wallPaths) buildWallPaths();
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.lineJoin = 'round';
+    ctx.stroke(wallPaths.inner);
+    ctx.stroke(wallPaths.outer);
+    ctx.restore();
+  }
+
+  function drawMaze() {
+    const flash = levelClearTimer > 0 && Math.floor(flashTimer * 8) % 2 === 0;
+    drawWalls(flash ? '#ffffff' : '#2121ff');
+
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        const cell = maze[y][x];
+        if (cell === '#') {
+          // walls are drawn as a whole below
+        } else if (cell === '.') {
+          ctx.fillStyle = '#ffd9b3';
+          ctx.beginPath();
+          ctx.arc(x * TILE + 4, y * TILE + 4, 1.1, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (cell === 'o') {
+          ctx.fillStyle = '#ffd9b3';
+          ctx.beginPath();
+          ctx.arc(x * TILE + 4, y * TILE + 4, 2.9, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (cell === '-') {
+          ctx.fillStyle = '#ffb8de';
+          ctx.fillRect(x * TILE, y * TILE + 4, TILE, 2);
+        }
+      }
+    }
+  }
+
+  function drawPacman() {
+    if (levelClearTimer > 0 || pacman.freezeTimer > 0.2) return;
+
+    const angle = {
+      right: 0,
+      left: Math.PI,
+      up: -Math.PI / 2,
+      down: Math.PI / 2,
+      none: Math.PI
+    }[pacman.dir.name];
+
+    ctx.fillStyle = '#ffe400';
+    ctx.beginPath();
+
+    if (deathTimer > 0) {
+      const open = Math.min(Math.PI, pacman.deathPhase);
+      ctx.moveTo(pacman.x, pacman.y);
+      ctx.arc(pacman.x, pacman.y, 3.9, angle + open, angle - open + Math.PI * 2);
+      ctx.closePath();
+      ctx.fill();
+      return;
+    }
+
+    const mouth = 0.16 + Math.abs(Math.sin(pacman.mouthPhase)) * 0.34;
+    ctx.moveTo(pacman.x, pacman.y);
+    ctx.arc(pacman.x, pacman.y, 3.9, angle + mouth, angle - mouth + Math.PI * 2);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawGhost(g) {
+    let color = g.color;
+    if (g.state === 'frightened') color = g.flash ? '#f1f1f1' : '#2146ff';
+
+    if (g.state !== 'eyes') {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(g.x, g.y - 1, 4, Math.PI, 0);
+      ctx.lineTo(g.x + 4, g.y + 4);
+      ctx.lineTo(g.x + 2.6, g.y + 2.2);
+      ctx.lineTo(g.x + 1.1, g.y + 4);
+      ctx.lineTo(g.x - 1.1, g.y + 2.2);
+      ctx.lineTo(g.x - 2.6, g.y + 4);
+      ctx.lineTo(g.x - 4, g.y + 2.2);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    const ox = g.dir.x * 0.85;
+    const oy = g.dir.y * 0.85;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.ellipse(g.x - 1.8, g.y - 0.7, 1.7, 2.1, 0, 0, Math.PI * 2);
+    ctx.ellipse(g.x + 1.8, g.y - 0.7, 1.7, 2.1, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#2146ff';
+    ctx.beginPath();
+    ctx.arc(g.x - 1.8 + ox, g.y - 0.7 + oy, 0.8, 0, Math.PI * 2);
+    ctx.arc(g.x + 1.8 + ox, g.y - 0.7 + oy, 0.8, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (g.state === 'frightened') {
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(g.x - 2.7, g.y + 2.2);
+      ctx.lineTo(g.x - 1.8, g.y + 1.3);
+      ctx.lineTo(g.x - 0.9, g.y + 2.2);
+      ctx.lineTo(g.x, g.y + 1.3);
+      ctx.lineTo(g.x + 0.9, g.y + 2.2);
+      ctx.lineTo(g.x + 1.8, g.y + 1.3);
+      ctx.lineTo(g.x + 2.7, g.y + 2.2);
+      ctx.stroke();
+    }
+  }
+
+  function drawFruit() {
+    if (!fruit) return;
+    ctx.fillStyle = '#ff2d2d';
+    ctx.beginPath();
+    ctx.arc(fruit.x - 1.2, fruit.y + 0.2, 2.1, 0, Math.PI * 2);
+    ctx.arc(fruit.x + 1.2, fruit.y + 0.2, 2.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#7ddc4c';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(fruit.x, fruit.y - 2.2);
+    ctx.lineTo(fruit.x + 1.2, fruit.y - 4.1);
+    ctx.stroke();
+  }
+
+  function drawTextPopup(p, color) {
+    if (!p) return;
+    arcadeText(p.text, p.x, p.y - 3, color || '#00ffff', 6, 'center');
+  }
+
+  function drawUI() {
+    const playing = readyTimer <= 0 && !gameOver && deathTimer <= 0;
+    if (!playing || Math.floor(performance.now() / 270) % 2 === 0) arcadeText('1UP', 24, 0, '#ffffff');
+    arcadeText('HIGH SCORE', 72, 0, '#ffffff');
+    arcadeText(score === 0 ? '00' : String(score), 56, 8, '#ffffff', 8, 'right');
+    if (highScore > 0) arcadeText(String(highScore), 136, 8, '#ffffff', 8, 'right');
+
+    ctx.fillStyle = '#ffe400';
+    for (let i = 0; i < lives - 1; i++) {
+      const x = 16 + i * 13;
+      const y = HEIGHT - 11;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.arc(x, y, 3.9 * SPRITE_SCALE, 0.25 * Math.PI, 1.75 * Math.PI);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    arcadeText('L' + level, WIDTH - 8, HEIGHT - 15, '#ffffff', 8, 'right');
+    if (manualMode) arcadeText('MANUAL', WIDTH / 2, HEIGHT - 15, '#ffb852', 8, 'center');
+    if (configSource === 'built-in') arcadeText('BUILT-IN CONFIG', WIDTH / 2, HEIGHT - 6, '#ff8c00', 4.5, 'center');
+
+    // READY! / GAME OVER in the corridor below the ghost house, as in the arcade
+    if (readyTimer > 0) arcadeText('READY!', WIDTH / 2, 19 * TILE, '#ffff00', 8, 'center');
+    if (gameOver) {
+      arcadeText('GAME  OVER', WIDTH / 2, 19 * TILE, '#ff0000', 8, 'center');
+      arcadeText('PRESS R', WIDTH / 2, 22 * TILE, '#ffffff', 8, 'center');
+    }
+  }
+
+
+  // =====================================================================
+  //  AUTOTESTS — press T to run, T again to close (the game restarts)
+  // =====================================================================
+  let testReport = null;
+
+  function runAutotests() {
+    const saved = { manualMode, showBubbles, highScore };
+    const results = [];
+    const FRAME = 1 / 60;
+    const sim = (frames) => { for (let i = 0; i < frames; i++) step(FRAME); };
+    const fresh = () => {
+      manualMode = false; testNoDeath = true; eatPauseTimer = 0;
+      startGame(); readyTimer = 0;
+    };
+    const placePac = (tx, ty, dir, desired) => {
+      const p = pixelCenter(tx, ty);
+      pacman.x = p.x; pacman.y = p.y; pacman.dir = dir; input.desired = desired || dir; pacman.freezeTimer = 0; pacman.pauseFrames = 0;
+    };
+    const placeGhost = (g, tx, ty, dir, state) => {
+      const p = pixelCenter(tx, ty);
+      Object.assign(g, { x: p.x, y: p.y, dir, state: state || 'normal', inHouse: false, entering: false, released: true, decided: null });
+    };
+    const G = (name) => ghosts.find(g => g.name === name);
+    const reachable = () => {
+      const R = new Set(['13,25']), q = [[13, 25]];
+      while (q.length) {
+        const [x, y] = q.shift();
+        for (const d of TURN_PRIORITY) {
+          if (!isWalkable(x, y, d, pacman)) continue;
+          let nx = x + d.x; const ny = y + d.y;
+          if (nx < 0) nx = COLS - 1; if (nx >= COLS) nx = 0;
+          const k = nx + ',' + ny;
+          if (!R.has(k)) { R.add(k); q.push([nx, ny]); }
+        }
+      }
+      return R;
+    };
+    const eq = (a, b, msg) => { if (a !== b) throw new Error((msg || '') + ' expected ' + b + ', got ' + a); };
+    const ok = (c, msg) => { if (!c) throw new Error(msg || 'condition false'); };
+    const tests = [];
+    const test = (name, fn) => tests.push({ name, fn });
+
+    // ---------- maze ----------
+    test('Maze is 28 x 36 tiles', () => { eq(LEVEL1.length, 36); ok(LEVEL1.every(r => r.length === 28), 'row width'); });
+    test('240 dots + 4 energizers', () => {
+      fresh(); let d = 0, o = 0;
+      for (const r of maze) for (const c of r) { if (c === '.') d++; if (c === 'o') o++; }
+      eq(d, 240, 'dots'); eq(o, 4, 'energizers'); eq(pelletsLeft, 244, 'pelletsLeft');
+    });
+    test('No dot on the start tiles', () => { fresh(); eq(tileAt(13, 25), ' '); eq(tileAt(14, 25), ' '); });
+    test('Maze is left-right mirrored', () => { ok(LEVEL1.every(r => r === [...r].reverse().join('')), 'not symmetric'); });
+    test('Every pellet is reachable', () => {
+      fresh(); const R = reachable();
+      for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++)
+        if ((maze[y][x] === '.' || maze[y][x] === 'o') && !R.has(x + ',' + y)) throw new Error('unreachable ' + x + ',' + y);
+    });
+    test('Tunnel open at both ends', () => { fresh(); ok(!isWall(0, 16) && !isWall(27, 16)); ok(isWalkable(0, 16, DIR.left, pacman) && isWalkable(27, 16, DIR.right, pacman)); });
+    test('Off-map only via tunnel', () => {
+      fresh(); const g = G('blinky');
+      ok(!isWalkable(0, 16, DIR.up, g) || !isWall(0, 15), 'up');
+      ok(!isWalkable(-1, 16, DIR.up, g), 'up from off-map'); ok(!isWalkable(-1, 16, DIR.down, g), 'down from off-map');
+      ok(isWalkable(-1, 16, DIR.right, g), 'back into tunnel');
+    });
+    test('Door: only eyes pass', () => {
+      fresh(); ok(!isWalkable(13, 13, DIR.down, pacman), 'pac-man');
+      const g = G('blinky'); placeGhost(g, 13, 13, DIR.left);
+      ok(!isWalkable(13, 13, DIR.down, g), 'normal ghost'); g.state = 'eyes'; ok(isWalkable(13, 13, DIR.down, g), 'eyes');
+    });
+
+    // ---------- Pac-Man ----------
+    test('Pac-Man starts and waits READY', () => {
+      startGame(); const t = tileOf(pacman); eq(t.tx, 13); eq(t.ty, 25); eq(pacman.dir, DIR.left);
+      const x = pacman.x; sim(30); eq(pacman.x, x, 'moved during READY');
+    });
+    test('Pac-Man moves after READY', () => { fresh(); const x = pacman.x; sim(30); ok(pacman.x < x - 10, 'did not move left'); });
+    test('Pac-Man stops at a wall', () => { fresh(); placePac(1, 3, DIR.left); sim(60); const t = tileOf(pacman); eq(t.tx, 1); eq(t.ty, 3); eq(pacman.dir, DIR.none); });
+    test('Buffered turn at junction', () => { fresh(); placePac(3, 7, DIR.right, DIR.down); sim(40); const t = tileOf(pacman); eq(t.tx, 6, 'column'); ok(t.ty > 7, 'did not turn down'); });
+    test('Reverse in mid-tile', () => { fresh(); placePac(10, 7, DIR.right); sim(3); ok(!aligned(pacman), 'should be mid-tile'); input.desired = DIR.left; sim(1); eq(pacman.dir, DIR.left); });
+    test('Dot gives 10 points', () => {
+      fresh(); placePac(1, 7, DIR.right); const s = score, p = pelletsLeft; sim(1);
+      eq(score - s, 10, 'score'); eq(pelletsLeft, p - 1, 'pellets'); eq(tileAt(1, 7), ' ');
+    });
+    test('Pause after eating a dot', () => {
+      fresh(); placePac(1, 7, DIR.right); sim(1); eq(pacman.pauseFrames, CFG.sp.pacman.dot_pause_frames, 'pause frames');
+      const x = pacman.x; sim(CFG.sp.pacman.dot_pause_frames); eq(pacman.x, x, 'moved during the pause');
+    });
+    test('Energizer: 50 pts + fright', () => {
+      fresh(); placePac(1, 5, DIR.up); const s = score; sim(1);
+      eq(score - s, 50, 'score'); ok(Math.abs(frightenedTimer - CFG.fsm.fright_seconds) < 0.05, 'timer ' + frightenedTimer);
+      eq(G('blinky').state, 'frightened', 'blinky');
+    });
+    test('Tunnel wraps Pac-Man', () => { fresh(); placePac(2, 16, DIR.left); sim(90); ok(pacman.x > WIDTH / 2, 'x=' + pacman.x); eq(tileOf(pacman).ty, 16); });
+
+    // ---------- targeting ----------
+    const chase = () => { globalMode = 'chase'; };
+    test('Blinky targets Pac-Man', () => { fresh(); chase(); placePac(6, 7, DIR.left); const tg = ghostTarget(G('blinky')); eq(tg.x, 6); eq(tg.y, 7); });
+    test('Pinky: 4 tiles ahead', () => { fresh(); chase(); placePac(10, 7, DIR.left); const g = G('pinky'); g.inHouse = false; const tg = ghostTarget(g); eq(tg.x, 6); eq(tg.y, 7); });
+    test('Pinky: arcade "up" quirk', () => { fresh(); chase(); placePac(10, 20, DIR.up); const g = G('pinky'); g.inHouse = false; const tg = ghostTarget(g); eq(tg.x, 6); eq(tg.y, 16); });
+    test('Inky: doubled vector', () => {
+      fresh(); chase(); placePac(10, 7, DIR.right); placeGhost(G('blinky'), 6, 3, DIR.left);
+      const g = G('inky'); g.inHouse = false; const tg = ghostTarget(g); eq(tg.x, 18); eq(tg.y, 11);
+    });
+    test('Clyde far: targets Pac-Man', () => { fresh(); chase(); placePac(1, 29, DIR.left); placeGhost(G('clyde'), 26, 3, DIR.left); const tg = ghostTarget(G('clyde')); eq(tg.x, 1); eq(tg.y, 29); });
+    test('Clyde near: own corner', () => { fresh(); chase(); placePac(6, 7, DIR.left); placeGhost(G('clyde'), 9, 7, DIR.left); const tg = ghostTarget(G('clyde')); eq(tg.x, 0); eq(tg.y, 35); });
+    test('Scatter corners', () => {
+      fresh(); globalMode = 'scatter';
+      const want = { blinky: [25, 0], pinky: [2, 0], inky: [27, 35], clyde: [0, 35] };
+      for (const g of ghosts) { g.inHouse = false; const tg = ghostTarget(g); eq(tg.x + ',' + tg.y, want[g.name].join(','), g.name); }
+    });
+    test('No reverse at a junction', () => {
+      fresh(); chase(); const g = G('blinky'); placeGhost(g, 6, 7, DIR.right); placePac(1, 7, DIR.left);
+      chooseGhostDirection(g); ok(g.dir !== DIR.left, 'reversed');
+    });
+    test('Tie-break: up first', () => {
+      fresh(); globalMode = 'scatter'; const g = G('blinky'); placeGhost(g, 6, 7, DIR.right);
+      const keep = SCATTER_TARGET.blinky; SCATTER_TARGET.blinky = { x: 0, y: 7 };
+      try { chooseGhostDirection(g); eq(g.dir, DIR.up); } finally { SCATTER_TARGET.blinky = keep; }
+    });
+
+    // ---------- ghost movement ----------
+    test('Ghosts stay on corridor lines', () => {
+      fresh();
+      for (let f = 0; f < 1500; f++) {
+        step(FRAME);
+        for (const g of ghosts) {
+          if (g.inHouse) continue;
+          const c = pixelCenter(tileOf(g).tx, tileOf(g).ty);
+          if (Math.abs(g.x - c.x) > 1e-6 && Math.abs(g.y - c.y) > 1e-6) throw new Error(g.name + ' off line at ' + g.x + ',' + g.y);
+        }
+      }
+    });
+    test('Ghosts never enter walls', () => {
+      fresh();
+      for (let f = 0; f < 1500; f++) { step(FRAME); for (const g of ghosts) { const t = tileOf(g); if (tileAt(t.tx, t.ty) === '#') throw new Error(g.name + ' in wall ' + t.tx + ',' + t.ty); } }
+    });
+    test('Ghosts never leave the maze', () => {
+      fresh();
+      for (let f = 0; f < 1500; f++) { step(FRAME); for (const g of ghosts) { const t = tileOf(g); if (t.ty !== 16 && (t.tx < 0 || t.tx >= COLS)) throw new Error(g.name + ' off map'); } }
+    });
+    test('Blinky roams the maze', () => {
+      fresh(); const seen = new Set();
+      for (let f = 0; f < 1200; f++) { step(FRAME); const t = tileOf(G('blinky')); seen.add(t.tx + ',' + t.ty); }
+      ok(seen.size > 40, 'only ' + seen.size + ' tiles');
+    });
+    test('No back-and-forth jitter', () => {
+      fresh(); let rev = 0, last = G('blinky').dir;
+      for (let f = 0; f < 1200; f++) { step(FRAME); const d = G('blinky').dir; if (d === reverse(last)) rev++; last = d; }
+      ok(rev <= 4, rev + ' reversals in 20 s');
+    });
+    test('Frightened ghost moves in tunnel', () => {
+      fresh(); const g = G('blinky'); placeGhost(g, 3, 16, DIR.left, 'frightened'); frightenedTimer = 5; const x = g.x;
+      sim(30); ok(Math.abs(g.x - x) > 3, 'stuck');
+    });
+    test('Eyes get home from everywhere', () => {
+      fresh(); const g = G('blinky'); const R = reachable(); let n = 0;
+      for (const k of R) {
+        const [tx, ty] = k.split(',').map(Number);
+        for (const d of TURN_PRIORITY) {
+          if (!isWalkable(tx, ty, d, g)) continue;
+          placeGhost(g, tx, ty, d, 'eyes'); n++;
+          let f = 0; while (g.state === 'eyes' && f++ < 3000) { if (g.inHouse) moveInHouse(g, 1.45); else moveGhost(g, 1.45); }
+          if (g.state === 'eyes') throw new Error('lost from ' + k + ' ' + d.name);
+        }
+      }
+      ok(n > 500, 'only ' + n + ' starts');
+    });
+    test('Eyes revive and come out', () => {
+      fresh(); const g = G('blinky'); placeGhost(g, 6, 7, DIR.right, 'eyes');
+      let f = 0; while (!(g.state === 'normal' && !g.inHouse) && f++ < 1500) step(FRAME);
+      ok(g.state === 'normal' && !g.inHouse, 'state ' + g.state + ' inHouse ' + g.inHouse);
+    });
+    test('Exit lands above the door', () => {
+      fresh(); const g = G('pinky'); g.released = true;
+      let f = 0; while (g.inHouse && f++ < 600) step(FRAME);
+      ok(!g.inHouse, 'still inside'); const t = tileOf(g); ok(t.ty === 13, 'row ' + t.ty);
+    });
+    test('Waiting ghost bobs on the spot', () => {
+      fresh(); const g = G('clyde'); let minY = 1e9, maxY = -1e9;
+      for (let f = 0; f < 120; f++) { step(FRAME); eq(g.x, HOME_X.clyde, 'x moved'); minY = Math.min(minY, g.y); maxY = Math.max(maxY, g.y); }
+      ok(maxY - minY > 4 && maxY - minY <= 2 * HOUSE_BOB + 1e-6, 'range ' + minY + '..' + maxY);
+    });
+
+    // ---------- modes, house release, fright ----------
+    test('Scatter -> chase on time', () => {
+      const first = MODE_SCHEDULE[0].seconds;
+      fresh(); eq(globalMode, 'scatter'); sim(first * 60 - 2); eq(globalMode, 'scatter', 'too early');
+      const g = G('blinky'), before = g.dir;
+      modeTimer = first - 1e-6; updateMode(FRAME);
+      eq(globalMode, 'chase', 'mode'); eq(g.dir, reverse(before), 'blinky did not reverse');
+    });
+    test('Mode timer pauses in fright', () => { fresh(); sim(60); const m = modeTimer; triggerFrightened(); sim(120); ok(Math.abs(modeTimer - m) < 1e-9, 'timer ran'); });
+    test('House release by dot count', () => {
+      for (const n of ['inky', 'clyde']) {
+        const need = CFG.fsm.ghosts[n].release_dots;
+        fresh(); pelletCounter = need - 1; releaseGhostsFromDots(); ok(!G(n).released, n + ' too early');
+        pelletCounter = need; releaseGhostsFromDots(); ok(G(n).released, n + ' not released at ' + need);
+      }
+    });
+    test('Fright ends on time', () => {
+      fresh(); placePac(1, 3, DIR.left); placeGhost(G('blinky'), 26, 29, DIR.left); triggerFrightened(); sim(CFG.fsm.fright_seconds * 60 + 2);
+      eq(frightenedTimer, 0); eq(G('blinky').state, 'normal');
+    });
+    test('Eating ghosts: 200 then 400', () => {
+      fresh(); triggerFrightened(); const s0 = score;
+      const a = G('blinky'), b = G('pinky');
+      placePac(6, 7, DIR.right); placeGhost(a, 6, 7, DIR.left, 'frightened'); collide();
+      eq(score - s0, 200, 'first'); eq(a.state, 'eyes');
+      eatPauseTimer = 0; pacman.freezeTimer = 0;
+      placeGhost(b, 6, 7, DIR.left, 'frightened'); collide();
+      eq(score - s0, 600, 'second');
+    });
+    test('Touching a ghost costs a life', () => {
+      fresh(); testNoDeath = false; const l = lives; placePac(6, 7, DIR.right); placeGhost(G('blinky'), 6, 7, DIR.left);
+      collide(); ok(deathTimer > 0, 'no death'); sim(110); eq(lives, l - 1);
+    });
+    test('Game over on the last life', () => {
+      fresh(); testNoDeath = false; lives = 1; placePac(6, 7, DIR.right); placeGhost(G('blinky'), 6, 7, DIR.left);
+      collide(); sim(110); ok(gameOver, 'not game over');
+    });
+    test('Fruit at 70 dots, 100 pts', () => {
+      fresh(); pelletCounter = 69; placePac(1, 7, DIR.right); sim(1); ok(fruit, 'no fruit');
+      const s = score; placePac(13, 19, DIR.left); pacman.x = fruit.x; pacman.y = fruit.y; collide(); eq(score - s, 100);
+    });
+    test('Level clear and next level', () => {
+      fresh();
+      for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (maze[y][x] === '.' || maze[y][x] === 'o') maze[y][x] = ' ';
+      maze[7][1] = '.'; recountPellets(); placePac(1, 7, DIR.right); sim(1);
+      ok(levelClearTimer > 0, 'no clear'); sim(140); eq(level, 2); eq(pelletsLeft, 244);
+    });
+
+    // ---------- configuration (YAML) ----------
+    test('YAML reader', () => {
+      const d = parseYAML('# c\na: 1\nb:\n  c: "x # y"\n  d: [1, two, {e: 3}]\nl:\n  - { k: v }\n  - k: w\n    n: 2\n  - 5\n');
+      eq(d.a, 1); eq(d.b.c, 'x # y'); eq(d.b.d[1], 'two'); eq(d.b.d[2].e, 3);
+      eq(d.l[0].k, 'v'); eq(d.l[1].k, 'w'); eq(d.l[1].n, 2); eq(d.l[2], 5);
+      const f = parseYAML(BUILTIN_FSM_YAML);
+      eq(Object.keys(f.states).length, 5, 'states'); ok(f.transitions.length >= 7, 'transitions'); eq(f.mode_schedule.length, 8, 'schedule');
+    });
+    test('Speeds come from the table', () => {
+      fresh(); const sp = CFG.sp, u = CFG.unit;
+      ok(Math.abs(pacmanSpeed() - sp.pacman.normal * u) < 1e-9, 'pac-man');
+      const g = G('pinky'); placeGhost(g, 6, 7, DIR.left); ok(Math.abs(ghostSpeed(g) - sp.ghost.normal * u) < 1e-9, 'ghost');
+      placeGhost(g, 3, 16, DIR.left); ok(Math.abs(ghostSpeed(g) - sp.ghost.tunnel * u) < 1e-9, 'tunnel');
+      const b = G('blinky'); placeGhost(b, 6, 7, DIR.left); pelletsLeft = sp.blinky.elroy2.dots_left;
+      ok(Math.abs(ghostSpeed(b) - sp.blinky.elroy2.speed * u) < 1e-9, 'elroy');
+    });
+    test('FSM table drives transitions', () => {
+      fresh(); const g = G('blinky'); placeGhost(g, 6, 7, DIR.right);
+      const saved = CFG.fsm.transitions;
+      try {
+        CFG.fsm.transitions = saved.filter(tr => tr.event !== 'mode_change');   // remove the reversal rule
+        modeTimer = MODE_SCHEDULE[0].seconds - 1e-6; updateMode(FRAME);
+        eq(g.dir, DIR.right, 'reversed without a rule');
+        CFG.fsm.transitions = saved;
+        modeTimer = MODE_SCHEDULE[1].seconds - 1e-6; updateMode(FRAME);
+        eq(g.dir, DIR.left, 'did not reverse with the rule');
+      } finally { CFG.fsm.transitions = saved; }
+    });
+
+    // ---------- manual mode ----------
+    test('Manual: all ghosts HOME, frozen', () => {
+      fresh(); sim(120); toggleManual();
+      try {
+        ok(ghosts.every(g => ghostLabel(g) === 'HOME'), ghosts.map(ghostLabel).join());
+        const m = modeTimer; sim(600);
+        ok(ghosts.every(g => ghostLabel(g) === 'HOME'), 'left home'); eq(modeTimer, m, 'mode timer');
+      } finally { manualMode = false; }
+    });
+    test('Manual: 1-4 step the cycle', () => {
+      fresh(); toggleManual();
+      try {
+        const g = G('inky'), seq = [];
+        stepGhostState(2); let f = 0; while (g.inHouse && f++ < 600) step(FRAME); seq.push(ghostLabel(g));
+        stepGhostState(2); seq.push(ghostLabel(g));
+        stepGhostState(2); seq.push(ghostLabel(g));
+        stepGhostState(2); seq.push(ghostLabel(g));
+        f = 0; while (g.state === 'eyes' && f++ < 3000) step(FRAME); seq.push(ghostLabel(g));
+        eq(seq.join('>'), 'SCATTER>CHASE>EVADE>DEAD>HOME');
+      } finally { manualMode = false; }
+    });
+
+    for (let i = 0; i < tests.length; i++) {
+      const tst = tests[i];
+      let pass = true, err = '';
+      try { tst.fn(); } catch (e) { pass = false; err = e.message; }
+      results.push({ n: i + 1, name: tst.name, pass, err });
+    }
+    // back to a normal game
+    testNoDeath = false; manualMode = false; eatPauseTimer = 0;
+    showBubbles = saved.showBubbles; highScore = saved.highScore;
+    startGame();
+    const passed = results.filter(r => r.pass).length;
+    console.log('AUTOTEST ' + passed + '/' + results.length + ' passed');
+    console.table(results.map(r => ({ '#': r.n, test: r.name, result: r.pass ? 'PASS' : 'FAIL', error: r.err })));
+    return { results, passed };
+  }
+
+  function drawTestReport() {
+    if (!testReport) return;
+    const { results, passed } = testReport;
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.92)';
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    ctx.textBaseline = 'top';
+    arcadeText('AUTOTEST  ' + passed + '/' + results.length + ' PASSED', 8, 6, passed === results.length ? '#7ddc4c' : '#ff5050', 8);
+    ctx.font = '4.6px Arial';
+    const half = Math.ceil(results.length / 2);
+    results.forEach((r, i) => {
+      const col = i < half ? 0 : 1, row = i < half ? i : i - half;
+      const x = 6 + col * 110, y = 22 + row * 9.4;
+      ctx.fillStyle = r.pass ? '#7ddc4c' : '#ff5050';
+      ctx.fillText((r.pass ? 'OK  ' : 'FAIL ') + String(r.n).padStart(2, '0'), x, y);
+      ctx.fillStyle = '#e8e8f0';
+      ctx.fillText(r.name, x + 20, y);
+      if (!r.pass) { ctx.fillStyle = '#ff9a9a'; ctx.fillText(r.err.slice(0, 40), x + 20, y + 4.6); }
+    });
+    ctx.fillStyle = '#9aa0b8';
+    ctx.font = '5px Arial';
+    ctx.fillText('T: close and restart   (details in the browser console)   config: ' + configSource + ', speeds: ' + CFG.profileName, 8, HEIGHT - 9);
+    ctx.restore();
+  }
+
+  function draw() {
+    tctx.setTransform(1, 0, 0, 1, 0, 0);
+    tctx.clearRect(0, 0, textCanvas.width, textCanvas.height);
+    tctx.setTransform(textScale, 0, 0, textScale, 0, 0);
+    ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    drawMaze();
+    if (fruit) at16(fruit.x, fruit.y, drawFruit);
+    at16(pacman.x, pacman.y, drawPacman);
+    for (let i = 0; i < ghosts.length; i++) at16(ghosts[i].x, ghosts[i].y, () => drawGhost(ghosts[i]));
+    drawBubbles();
+    drawTextPopup(frightenedScorePopup);
+    drawTextPopup(fruitAward, '#ffb8ff');
+    drawUI();
+    if (testReport) {
+      tctx.setTransform(1, 0, 0, 1, 0, 0);
+      tctx.clearRect(0, 0, textCanvas.width, textCanvas.height);
+      tctx.setTransform(textScale, 0, 0, textScale, 0, 0);
+    }
+    drawTestReport();
+  }
+
+  function step(dt) {
+    updateTimers(dt);
+    updateMode(dt);
+    updateFruit(dt);
+    updatePacman();
+    for (let i = 0; i < ghosts.length; i++) updateGhost(ghosts[i]);
+    collide();
+  }
+
+  function loop(ts) {
+    if (!lastTimestamp) lastTimestamp = ts;
+    let dt = (ts - lastTimestamp) / 1000;
+    if (dt > 0.05) dt = 0.05;
+    lastTimestamp = ts;
+
+    const fixed = 1 / 60;
+    accumulator += dt;
+    if (testReport) accumulator = 0;
+    while (accumulator >= fixed) {
+      step(fixed);
+      accumulator -= fixed;
+    }
+
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') input.desired = DIR.left;
+    else if (e.key === 'ArrowRight') input.desired = DIR.right;
+    else if (e.key === 'ArrowUp') input.desired = DIR.up;
+    else if (e.key === 'ArrowDown') input.desired = DIR.down;
+    else if (e.key === 'r' || e.key === 'R') loadConfig().then(startGame);
+    else if (e.key === 't' || e.key === 'T') {
+      if (testReport) { testReport = null; startGame(); }
+      else testReport = runAutotests();
+    }
+    else if (testReport) return;
+    else if (e.key === '0') toggleManual();
+    else if (e.key === 'Tab') { e.preventDefault(); showBubbles = !showBubbles; }
+    else if (manualMode && e.key >= '1' && e.key <= '4') stepGhostState(Number(e.key) - 1);
+  });
+
+  loadConfig().then(() => {
+    startGame();
+    requestAnimationFrame(loop);
+  });
+})();
+</script>
+</body>
+</html>
