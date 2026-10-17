@@ -1,7 +1,7 @@
 # Sound files used by the game
 #
-# Paths are relative to pacman.html. To use another sound, put the file next to
-# pacman.html (e.g. into mysounds/) and change `file:` below.
+# Paths are relative to index.html. To use another sound, put the file next to
+# index.html (e.g. into mysounds/) and change `file:` below.
 # WAV, MP3 and OGG all work. A missing or unreadable file is simply skipped:
 # the game keeps running without that sound.
 #
@@ -26,7 +26,7 @@ sounds:
   eyes:      { file: mysounds/pacghostretreat.wav, loop: true, when: "background while DEAD eyes run home" }
   eat_ghost: { file: mysounds/pacghosteat.wav,     when: "Pac-Man eats a ghost (FSM: touch EVADE -> DEAD)" }
   eat_fruit: { file: mysounds/pacfruit.wav,        when: "Pac-Man eats the fruit" }
-  death:     { file: mysounds/pacdie1.wav,         when: "a ghost catches Pac-Man (FSM: touch -> kill_pacman)" }
+  death:     { file: mysounds/pacdie.mp3,         when: "a ghost catches Pac-Man (FSM: touch -> kill_pacman)" }
   cutscene:  { file: mysounds/paccutscene.wav,     when: "intermission after each level, played twice (there and back)" }
 
 # In mysounds/ but not used by the game yet (no matching event so far):

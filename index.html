@@ -96,7 +96,19 @@
   const HEIGHT = ROWS * TILE;
 
   const canvas = document.getElementById('game');
-  const ctx = canvas.getContext('2d');
+  const mainCtx = canvas.getContext('2d');
+  let ctx = mainCtx;   // drawing functions use ctx; it points at the sprite layer while sprites are drawn
+
+  // Sprite layer: Pac-Man and the ghosts are drawn into a small canvas
+  // (SPRITE_RES pixels per game pixel), their edges are made hard, and the
+  // layer is scaled up without smoothing, so they look slightly pixelated
+  // like arcade sprites. The maze and the text stay sharp.
+  // 1 = coarse (each sprite about 10 x 10 blocks), 2 = fine, 0 = off (smooth).
+  const SPRITE_RES = 1.5;
+  const SPRITE_BOX = 32;   // game pixels around a sprite centre (fits the giant Pac-Man too)
+  const spriteCanvas = document.createElement('canvas');
+  spriteCanvas.width = spriteCanvas.height = Math.ceil(SPRITE_BOX * (SPRITE_RES || 1));
+  const spriteCtx = spriteCanvas.getContext('2d', { willReadFrequently: true });
   // The game logic runs in the original 224x288 coordinate space.
   // RENDER_SCALE = 0: the canvas matches the screen's own resolution, everything is drawn sharp.
   // RENDER_SCALE = 1, 2, 3: the picture is drawn that many times the arcade resolution and
@@ -220,7 +232,7 @@
   const CONFIG_FILES = { speeds: 'pacman-speeds.yaml', fsm: 'ghost-fsm.yaml', sounds: 'sounds.yaml' };
   const BUILTIN_SPEEDS_YAML = "# Pac-Man speed table\n#\n# The game reads this file when it starts and again on every restart (R key),\n# so edits take effect without reloading the page.\n#\n# All speeds are percentages. 100 % equals `px_per_frame_at_100` pixels per frame\n# at 60 frames per second. The arcade's 100 % is 75.758 px/s = 1.2626 px/frame.\n#\n# `active` selects the profile the game uses.\n\nactive: current\n\nprofiles:\n\n  # The speeds this clone has used so far (ghost / Pac-Man = 93 %, everything ~19 % slower than the arcade).\n  current:\n    px_per_frame_at_100: 1.0\n    pacman:\n      normal: 82                 # 0.82 px/frame\n      frightened: 92             # while the ghosts are blue\n      dot_pause_frames: 1        # Pac-Man stops for 1 frame on every dot\n      energizer_pause_frames: 3  # and for 3 frames on an energizer\n    ghost:\n      normal: 76\n      tunnel: 51.7               # inside the side tunnels\n      frightened: 46\n      frightened_tunnel: 34\n      eyes: 145                  # DEAD: eyes running back to the house\n      house: 50                  # bobbing in the house and walking out\n    blinky:\n      normal: 79\n      elroy1: { dots_left: 20, speed: 84 }   # \"Cruise Elroy\": Blinky speeds up near the end of the level\n      elroy2: { dots_left: 10, speed: 90 }\n\n  # The original arcade, level 1 (the commonly documented table).\n  arcade_level1:\n    px_per_frame_at_100: 1.2626\n    pacman:\n      normal: 80\n      frightened: 90\n      dot_pause_frames: 1\n      energizer_pause_frames: 3\n    ghost:\n      normal: 75\n      tunnel: 40\n      frightened: 50\n      frightened_tunnel: 40      # the tunnel limit applies to blue ghosts too\n      eyes: 150                  # not in the published table; estimate\n      house: 40                  # not in the published table; estimate\n    blinky:\n      normal: 75                 # same as the others until Elroy kicks in\n      elroy1: { dots_left: 20, speed: 80 }\n      elroy2: { dots_left: 10, speed: 85 }\n";
   const BUILTIN_FSM_YAML = "# Ghost state machine (FSM)\n#\n# The game reads this file when it starts and again on every restart (R key).\n#\n#   HOME     waiting in the ghost house, or walking out of it\n#   SCATTER  heading for its own corner\n#   CHASE    hunting Pac-Man, each ghost with its own targeting rule\n#   EVADE    frightened (blue), turns at random, can be eaten\n#   DEAD     eyes running back to the house\n\nstates:\n  HOME:    { color: \"#9aa0b8\", speed: house,      target: none }\n  SCATTER: { color: \"#7ddc4c\", speed: normal,     target: scatter_corner }\n  CHASE:   { color: \"#ff5050\", speed: normal,     target: chase }\n  EVADE:   { color: \"#4f7bff\", speed: frightened, target: random }\n  DEAD:    { color: \"#ffffff\", speed: eyes,       target: house_door }\n\n# Global scatter/chase timer (level 1). In transitions, `to: mode` means\n# whichever of SCATTER / CHASE this timer is in right now.\n# The timer pauses while the ghosts are frightened.\nmode_schedule:\n  - { mode: SCATTER, seconds: 7 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 7 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 5 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 5 }\n  - { mode: CHASE,   seconds: forever }\n\n# How long the ghosts stay blue after Pac-Man eats an energizer.\nfright_seconds: 6\n\n# Per ghost:\n#   start           starting state (HOME = in the ghost house)\n#   release_dots    how many eaten dots let it out of the house\n#   scatter_corner  its corner in SCATTER (tile x, tile y; may lie outside the maze)\n#   chase           how it aims at Pac-Man in CHASE:\n#     rule: pacman   Pac-Man's own tile\n#     rule: ahead    `tiles` tiles in front of Pac-Man\n#     rule: vector   take the point `tiles` in front of Pac-Man, then double the\n#                    vector from the `partner` ghost to that point\n#     rule: shy      Pac-Man's tile while farther than `radius` tiles, else its scatter corner\n#     up_quirk: true copies the arcade bug: when Pac-Man faces up, the \"in front of\"\n#                    point is also shifted the same number of tiles to the left\nghosts:\n  blinky:\n    start: SCATTER\n    release_dots: 0\n    scatter_corner: [25, 0]\n    chase: { rule: pacman }\n  pinky:\n    start: HOME\n    release_dots: 0\n    scatter_corner: [2, 0]\n    chase: { rule: ahead, tiles: 4, up_quirk: true }\n  inky:\n    start: HOME\n    release_dots: 12\n    scatter_corner: [27, 35]\n    chase: { rule: vector, tiles: 2, partner: blinky, up_quirk: true }\n  clyde:\n    start: HOME\n    release_dots: 32\n    scatter_corner: [0, 35]\n    chase: { rule: shy, radius: 8 }\n\n# Events raised by the game:\n#   released      the dot counter lets the ghost out of the house\n#   mode_change   the scatter/chase timer switches\n#   energizer     Pac-Man eats an energizer\n#   fright_end    the blue time is over\n#   touch         Pac-Man and the ghost are on the same spot\n#   arrived_home  DEAD eyes reached their place in the house\n#\n# Options:\n#   reverse: true      the ghost turns around\n#   frightened: true   blue look without changing state (ghosts waiting at home)\n#   action:            score_ghost (Pac-Man eats it) / kill_pacman (Pac-Man loses a life)\n#   sound:             a sound from sounds.yaml to play when the transition happens\n# The first matching line wins. Events with no matching line are ignored.\ntransitions:\n  - { event: released,     from: HOME,             to: mode }\n  - { event: mode_change,  from: [SCATTER, CHASE], to: mode,  reverse: true }\n  - { event: energizer,    from: [SCATTER, CHASE], to: EVADE, reverse: true }\n  - { event: energizer,    from: HOME,             to: HOME,  frightened: true }\n  - { event: fright_end,   from: EVADE,            to: mode }\n  - { event: fright_end,   from: HOME,             to: HOME,  frightened: false }\n  - { event: touch,        from: EVADE,            to: DEAD,  action: score_ghost, sound: eat_ghost }\n  - { event: touch,        from: [SCATTER, CHASE], action: kill_pacman, sound: death }\n  - { event: arrived_home, from: DEAD,             to: HOME }\n\n# Manual mode (key 0): keys 1-4 move ghost 1-4 to the next state in this list.\nmanual_cycle: [HOME, SCATTER, CHASE, EVADE, DEAD]\n";
-  const BUILTIN_SOUNDS_YAML = "# Sound files used by the game\n#\n# Paths are relative to pacman.html. To use another sound, put the file next to\n# pacman.html (e.g. into mysounds/) and change `file:` below.\n# WAV, MP3 and OGG all work. A missing or unreadable file is simply skipped:\n# the game keeps running without that sound.\n#\n# The generated arcade-style set (gen_sounds.py) is in sounds/; its list is in\n# sounds_generated.yaml. To switch back, copy the file names from there.\n#\n#   loop: true   the sound repeats while its situation lasts (background sounds)\n#   when         where the game plays it (for reading only)\n\nenabled: true\nvolume: 0.6          # 0 .. 1, M key toggles sound on/off\n\nsounds:\n  start:     { file: mysounds/pacstart.wav,        when: \"new game, during READY!\" }\n  chomp_a:   { file: mysounds/pacdot1.wav,         when: \"Pac-Man eats a dot or energizer (1st, 3rd, 5th ...)\" }\n  chomp_b:   { file: mysounds/pacdot2.wav,         when: \"Pac-Man eats a dot or energizer (2nd, 4th, 6th ...)\" }\n  siren_1:   { file: mysounds/pacghost1.wav,       loop: true, when: \"background, 181 or more pellets left\" }\n  siren_2:   { file: mysounds/pacghost2.wav,       loop: true, when: \"background, 121-180 pellets left\" }\n  siren_3:   { file: mysounds/pacghost3.wav,       loop: true, when: \"background, 61-120 pellets left\" }\n  siren_4:   { file: mysounds/pacghost4.wav,       loop: true, when: \"background, 60 or fewer pellets left\" }\n  fright:    { file: mysounds/pacghostblue.wav,    loop: true, when: \"background while the ghosts are blue (EVADE)\" }\n  eyes:      { file: mysounds/pacghostretreat.wav, loop: true, when: \"background while DEAD eyes run home\" }\n  eat_ghost: { file: mysounds/pacghosteat.wav,     when: \"Pac-Man eats a ghost (FSM: touch EVADE -> DEAD)\" }\n  eat_fruit: { file: mysounds/pacfruit.wav,        when: \"Pac-Man eats the fruit\" }\n  death:     { file: mysounds/pacdie1.wav,         when: \"a ghost catches Pac-Man (FSM: touch -> kill_pacman)\" }\n  cutscene:  { file: mysounds/paccutscene.wav,     when: \"intermission after each level, played twice (there and back)\" }\n\n# In mysounds/ but not used by the game yet (no matching event so far):\n#   paccoin.wav        coin inserted\n#   pacextralife.wav   extra life\n#   pacdie2.wav        short death sound (alternative to pacdie1.wav)\n\n# Background siren: which siren plays at how many pellets left.\n# Any number of levels; the first one whose limit is reached wins (checked from the highest).\nsiren_levels:\n  siren_1: 181\n  siren_2: 121\n  siren_3: 61\n  siren_4: 0\n";
+  const BUILTIN_SOUNDS_YAML = "# Sound files used by the game\n#\n# Paths are relative to index.html. To use another sound, put the file next to\n# index.html (e.g. into mysounds/) and change `file:` below.\n# WAV, MP3 and OGG all work. A missing or unreadable file is simply skipped:\n# the game keeps running without that sound.\n#\n# The generated arcade-style set (gen_sounds.py) is in sounds/; its list is in\n# sounds_generated.yaml. To switch back, copy the file names from there.\n#\n#   loop: true   the sound repeats while its situation lasts (background sounds)\n#   when         where the game plays it (for reading only)\n\nenabled: true\nvolume: 0.6          # 0 .. 1, M key toggles sound on/off\n\nsounds:\n  start:     { file: mysounds/pacstart.wav,        when: \"new game, during READY!\" }\n  chomp_a:   { file: mysounds/pacdot1.wav,         when: \"Pac-Man eats a dot or energizer (1st, 3rd, 5th ...)\" }\n  chomp_b:   { file: mysounds/pacdot2.wav,         when: \"Pac-Man eats a dot or energizer (2nd, 4th, 6th ...)\" }\n  siren_1:   { file: mysounds/pacghost1.wav,       loop: true, when: \"background, 181 or more pellets left\" }\n  siren_2:   { file: mysounds/pacghost2.wav,       loop: true, when: \"background, 121-180 pellets left\" }\n  siren_3:   { file: mysounds/pacghost3.wav,       loop: true, when: \"background, 61-120 pellets left\" }\n  siren_4:   { file: mysounds/pacghost4.wav,       loop: true, when: \"background, 60 or fewer pellets left\" }\n  fright:    { file: mysounds/pacghostblue.wav,    loop: true, when: \"background while the ghosts are blue (EVADE)\" }\n  eyes:      { file: mysounds/pacghostretreat.wav, loop: true, when: \"background while DEAD eyes run home\" }\n  eat_ghost: { file: mysounds/pacghosteat.wav,     when: \"Pac-Man eats a ghost (FSM: touch EVADE -> DEAD)\" }\n  eat_fruit: { file: mysounds/pacfruit.wav,        when: \"Pac-Man eats the fruit\" }\n  death:     { file: mysounds/pacdie1.wav,         when: \"a ghost catches Pac-Man (FSM: touch -> kill_pacman)\" }\n  cutscene:  { file: mysounds/paccutscene.wav,     when: \"intermission after each level, played twice (there and back)\" }\n\n# In mysounds/ but not used by the game yet (no matching event so far):\n#   paccoin.wav        coin inserted\n#   pacextralife.wav   extra life\n#   pacdie2.wav        short death sound (alternative to pacdie1.wav)\n\n# Background siren: which siren plays at how many pellets left.\n# Any number of levels; the first one whose limit is reached wins (checked from the highest).\nsiren_levels:\n  siren_1: 181\n  siren_2: 121\n  siren_3: 61\n  siren_4: 0\n";
   let CFG = null;              // { profileName, sp, unit, fsm }
   let configSource = '';       // 'yaml' or 'built-in'
 
@@ -477,8 +489,11 @@
     if (s.buffer) return s.buffer.duration;
     return s.el && isFinite(s.el.duration) ? s.el.duration : 0;
   }
+  const allLoopNodes = new Set();   // every background loop ever started and not yet stopped
   function stopLoop() {
-    if (loopNode) { try { loopNode.stop(); } catch (e) {} loopNode = null; }
+    for (const n of allLoopNodes) { try { n.stop(); } catch (e) {} }
+    allLoopNodes.clear();
+    loopNode = null;
     if (loopEl) { loopEl.pause(); loopEl = null; }
     loopPlaying = false;
   }
@@ -492,6 +507,7 @@
     if (audioCtx && s.buffer) {
       loopNode = audioCtx.createBufferSource();
       loopNode.buffer = s.buffer; loopNode.loop = true; loopNode.connect(audioGain); loopNode.start();
+      allLoopNodes.add(loopNode);
       loopPlaying = true;
     } else if (s.el && !s.failed) {
       loopEl = s.el; loopEl.loop = true; loopEl.volume = soundVolume; loopEl.currentTime = 0;
@@ -501,7 +517,7 @@
   }
   // which background sound fits the game right now
   function desiredLoop() {
-    if (!soundOn || testReport || readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || cutscene || gameOver) return null;
+    if (!soundOn || testReport || (document.hidden && !soundTestLog) || readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || cutscene || gameOver) return null;
     if (ghosts.some(g => g.state === 'eyes')) return 'eyes';
     if (frightenedTimer > 0 && ghosts.some(g => g.state === 'frightened')) return 'fright';
     return sirenFor(pelletsLeft);
@@ -513,6 +529,21 @@
     for (const [name, min] of lv) if (left >= min) return name;
     return lv.length ? lv[lv.length - 1][0] : null;
   }
+  // A hidden browser tab must be silent: the game stands still there (no animation
+  // frames), but a started background loop would keep sounding and pile up with the
+  // siren of the tab that is being played.
+  function onPageHidden(hidden) {
+    if (hidden) {
+      stopLoop(); currentLoop = null;
+      if (audioCtx && audioCtx.state === 'running' && !soundTestLog) audioCtx.suspend().catch(() => {});
+    } else if (audioCtx && audioCtx.state === 'suspended' && !soundTestLog) {
+      audioCtx.resume().catch(() => {});
+    }
+  }
+  document.addEventListener('visibilitychange', () => onPageHidden(document.hidden));
+  window.addEventListener('pagehide', () => onPageHidden(true));
+  window.addEventListener('pageshow', () => onPageHidden(document.hidden));
+
   function toggleSound() {
     soundOn = !soundOn;
     if (!soundOn) { stopLoop(); currentLoop = null; }
@@ -1591,7 +1622,15 @@
 
   // half-angle of the mouth: fully shut for a moment, then wide open (about 95 degrees)
   function mouthAngle(phase) {
-    return Math.max(0, Math.abs(Math.sin(phase)) * 0.98 - 0.15);
+    return Math.max(0, Math.abs(Math.sin(phase)) * 1.05 - 0.15);
+  }
+  // The mouth is cut deeper than the centre: its corner sits MOUTH_DEPTH x radius
+  // behind the centre, so the open mouth is a long, wide wedge.
+  const MOUTH_DEPTH = 0.4;
+  function pacPath(x, y, angle, mouth, r) {
+    ctx.moveTo(x - Math.cos(angle) * r * MOUTH_DEPTH, y - Math.sin(angle) * r * MOUTH_DEPTH);
+    ctx.arc(x, y, r, angle + mouth, angle - mouth + Math.PI * 2);
+    ctx.closePath();
   }
 
   // Pac-Man shape: facing `dirName`, mouth half-angle `mouth` (radians), radius r
@@ -1599,9 +1638,7 @@
     const angle = { right: 0, left: Math.PI, up: -Math.PI / 2, down: Math.PI / 2, none: Math.PI }[dirName];
     ctx.fillStyle = '#ffe400';
     ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.arc(x, y, r, angle + mouth, angle - mouth + Math.PI * 2);
-    ctx.closePath();
+    pacPath(x, y, angle, mouth, r);
     ctx.fill();
   }
 
@@ -1613,15 +1650,17 @@
       const k = c.t / c.half;
       const px = WIDTH + 12 - k * (WIDTH + 70);
       const gx = px + 26 - k * 8;
-      at16(px, y, () => drawPacShape(px, y, 'left', mouth, 3.9));
-      at16(gx, y, () => drawGhost({ x: gx, y, dir: DIR.left, state: 'normal', color: '#ff2d2d', flash: false, anim: c.t * 60 }));
+      const g = { x: gx, y, dir: DIR.left, state: 'normal', color: '#ff2d2d', flash: false, anim: c.t * 60 };
+      drawSprite(px, y, PAC_COLORS, () => at16(px, y, () => drawPacShape(px, y, 'left', mouth, 3.9)));
+      drawSprite(gx, y, ghostColors(g), () => at16(gx, y, () => drawGhost(g)));
     } else {
       // and back: blue Blinky runs right, a giant Pac-Man after him
       const k = Math.min(1, (c.t - c.half) / c.half);
       const gx = -12 + k * (WIDTH + 62);
       const px = gx - 46 + k * 18;      // closes in, but never catches him
-      at16(gx, y, () => drawGhost({ x: gx, y, dir: DIR.right, state: 'frightened', color: '#ff2d2d', flash: false, anim: c.t * 60 }));
-      at16(px, y - 6, () => drawPacShape(px, y - 6, 'right', mouth, 3.9 * 2.6));
+      const g = { x: gx, y, dir: DIR.right, state: 'frightened', color: '#ff2d2d', flash: false, anim: c.t * 60 };
+      drawSprite(gx, y, ghostColors(g), () => at16(gx, y, () => drawGhost(g)));
+      drawSprite(px, y - 6, PAC_COLORS, () => at16(px, y - 6, () => drawPacShape(px, y - 6, 'right', mouth, 3.9 * 2.6)));
     }
   }
 
@@ -1649,9 +1688,7 @@
     }
 
     const mouth = mouthAngle(pacman.mouthPhase);
-    ctx.moveTo(pacman.x, pacman.y);
-    ctx.arc(pacman.x, pacman.y, 3.9, angle + mouth, angle - mouth + Math.PI * 2);
-    ctx.closePath();
+    pacPath(pacman.x, pacman.y, angle, mouth, 3.9);
     ctx.fill();
   }
 
@@ -1677,6 +1714,21 @@
       ctx.fill();
     }
 
+    if (g.state === 'frightened') {
+      // arcade blue ghost: small square eyes and a wavy mouth, no eyeballs
+      const face = g.flash ? '#ff2d2d' : '#ffb8ae';
+      ctx.fillStyle = face;
+      ctx.fillRect(g.x - 2.4, g.y - 1.6, 1.4, 1.4);
+      ctx.fillRect(g.x + 1.0, g.y - 1.6, 1.4, 1.4);
+      ctx.strokeStyle = face;
+      ctx.lineWidth = 0.8;
+      ctx.beginPath();
+      ctx.moveTo(g.x - 3, g.y + 1.9);
+      for (let i = 1; i <= 6; i++) ctx.lineTo(g.x - 3 + i, g.y + (i % 2 ? 1.0 : 1.9));
+      ctx.stroke();
+      return;
+    }
+
     const ox = g.dir.x * 0.85;
     const oy = g.dir.y * 0.85;
     ctx.fillStyle = '#fff';
@@ -1691,19 +1743,6 @@
     ctx.arc(g.x + 1.8 + ox, g.y - 0.7 + oy, 0.8, 0, Math.PI * 2);
     ctx.fill();
 
-    if (g.state === 'frightened') {
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(g.x - 2.7, g.y + 2.2);
-      ctx.lineTo(g.x - 1.8, g.y + 1.3);
-      ctx.lineTo(g.x - 0.9, g.y + 2.2);
-      ctx.lineTo(g.x, g.y + 1.3);
-      ctx.lineTo(g.x + 0.9, g.y + 2.2);
-      ctx.lineTo(g.x + 1.8, g.y + 1.3);
-      ctx.lineTo(g.x + 2.7, g.y + 2.2);
-      ctx.stroke();
-    }
   }
 
   function drawFruit() {
@@ -1832,16 +1871,7 @@
     arcadeText(score === 0 ? '00' : String(score), 56, 8, '#ffffff', 8, 'right');
     if (highScore > 0) arcadeText(String(highScore), 136, 8, '#ffffff', 8, 'right');
 
-    ctx.fillStyle = '#ffe400';
-    for (let i = 0; i < lives - 1; i++) {
-      const x = 16 + i * 13;
-      const y = HEIGHT - 11;
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.arc(x, y, 3.9 * SPRITE_SCALE, 0.25 * Math.PI, 1.75 * Math.PI);
-      ctx.closePath();
-      ctx.fill();
-    }
+    drawLives();
 
     drawLevelFruits();
     if (manualMode) arcadeText('MANUAL', WIDTH / 2, HEIGHT - 15, '#ffb852', 8, 'center');
@@ -2128,7 +2158,7 @@
     test('Mouth shuts fully and opens wide', () => {
       let min = 9, max = 0;
       for (let ph = 0; ph < Math.PI; ph += 0.22) { const m = mouthAngle(ph); min = Math.min(min, m); max = Math.max(max, m); }
-      eq(min, 0, 'never fully shut'); ok(max > 0.75, 'opens only ' + max.toFixed(2));
+      eq(min, 0, 'never fully shut'); ok(max > 0.85, 'opens only ' + max.toFixed(2));
     });
     test('Ghost skirt ripples while moving', () => {
       fresh(); const g = G('blinky'); placeGhost(g, 6, 7, DIR.right);
@@ -2221,6 +2251,17 @@
     test('Fruit plays eat_fruit', () => {
       fresh(); spawnFruit(); pacman.x = fruit.x; pacman.y = fruit.y;
       ok(heard(() => collide()).includes('eat_fruit'));
+    });
+    test('Hidden tab is silent', () => {
+      fresh(); currentLoop = 'siren_1'; onPageHidden(true); eq(currentLoop, null, 'loop kept in a hidden tab');
+      onPageHidden(false); eq(desiredLoop(), sirenFor(pelletsLeft), 'no siren after coming back');
+    });
+    test('Death stops the siren', () => {
+      fresh(); readyTimer = 0; testNoDeath = false; eq(desiredLoop(), sirenFor(pelletsLeft));
+      placePac(6, 7, DIR.right); placeGhost(G('blinky'), 6, 7, DIR.left); collide();
+      ok(deathTimer > 0, 'no death'); eq(desiredLoop(), null, 'siren during death');
+      sim(Math.ceil(deathTimer * 60) + 2); eq(desiredLoop(), null, 'siren during READY!');
+      testNoDeath = true;
     });
     test('Background sound follows game', () => {
       fresh(); soundOn = true;
@@ -2339,7 +2380,7 @@
     // back to a normal game
     testNoDeath = false; manualMode = false; eatPauseTimer = 0;
     showBubbles = saved.showBubbles; highScore = saved.highScore;
-    soundTestLog = null; soundOn = saved.soundOn; currentLoop = null; loopPlaying = false;
+    soundTestLog = null; soundOn = saved.soundOn; stopLoop(); currentLoop = null;
     startGame();
     const passed = results.filter(r => r.pass).length;
     console.log('AUTOTEST ' + passed + '/' + results.length + ' passed');
@@ -2372,6 +2413,59 @@
     ctx.restore();
   }
 
+  function drawLives() {
+    ctx.fillStyle = '#ffe400';
+    for (let i = 0; i < lives - 1; i++) {
+      const x = 16 + i * 13;
+      const y = HEIGHT - 11;
+      drawSprite(x, y, PAC_COLORS, () => {
+        ctx.fillStyle = '#ffe400';
+        ctx.beginPath();
+        pacPath(x, y, Math.PI, 0.7, 3.9 * SPRITE_SCALE);   // spare lives face left
+        ctx.fill();
+      });
+    }
+  }
+
+  const hexRGB = (h) => [1, 3, 5].map(j => parseInt(h.slice(j, j + 2), 16));
+  const PAC_COLORS = ['#ffe400'];
+  function ghostColors(g) {
+    if (g.state === 'eyes') return ['#ffffff', '#2146ff'];
+    if (g.state === 'frightened') return g.flash ? ['#f1f1f1', '#ff2d2d'] : ['#2146ff', '#ffb8ae'];
+    return [g.color, '#ffffff', '#2146ff'];
+  }
+
+  // Draw one sprite with fn() into the small sprite canvas, centred on (cx, cy),
+  // then put it on the screen enlarged without smoothing. Every block becomes
+  // either empty or exactly one of `colors`, like real sprite hardware.
+  function drawSprite(cx, cy, colors, fn) {
+    if (!SPRITE_RES) { fn(); return; }
+    const sc = spriteCtx, N = spriteCanvas.width, x0 = cx - SPRITE_BOX / 2, y0 = cy - SPRITE_BOX / 2;
+    sc.setTransform(1, 0, 0, 1, 0, 0);
+    sc.clearRect(0, 0, N, N);
+    sc.setTransform(SPRITE_RES, 0, 0, SPRITE_RES, -x0 * SPRITE_RES, -y0 * SPRITE_RES);
+    ctx = sc;
+    try { fn(); } finally { ctx = mainCtx; }
+    const pal = colors.map(hexRGB);
+    const img = sc.getImageData(0, 0, N, N), d = img.data;
+    for (let i = 3; i < d.length; i += 4) {
+      if (!d[i]) continue;
+      if (d[i] < 110) { d[i] = 0; continue; }
+      d[i] = 255;
+      let best = pal[0], bestD = Infinity;
+      for (const c of pal) {
+        const dd = (d[i - 3] - c[0]) ** 2 + (d[i - 2] - c[1]) ** 2 + (d[i - 1] - c[2]) ** 2;
+        if (dd < bestD) { bestD = dd; best = c; }
+      }
+      d[i - 3] = best[0]; d[i - 2] = best[1]; d[i - 1] = best[2];
+    }
+    sc.putImageData(img, 0, 0);
+    const smooth = mainCtx.imageSmoothingEnabled;
+    mainCtx.imageSmoothingEnabled = false;
+    mainCtx.drawImage(spriteCanvas, x0, y0, SPRITE_BOX, SPRITE_BOX);
+    mainCtx.imageSmoothingEnabled = smooth;
+  }
+
   function draw() {
     ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
     ctx.fillStyle = '#000';
@@ -2385,8 +2479,8 @@
     }
     drawMaze();
     if (fruit) at16(fruit.x, fruit.y, drawFruit);
-    at16(pacman.x, pacman.y, drawPacman);
-    for (let i = 0; i < ghosts.length; i++) at16(ghosts[i].x, ghosts[i].y, () => drawGhost(ghosts[i]));
+    drawSprite(pacman.x, pacman.y, PAC_COLORS, () => at16(pacman.x, pacman.y, drawPacman));
+    for (const g of ghosts) drawSprite(g.x, g.y, ghostColors(g), () => at16(g.x, g.y, () => drawGhost(g)));
     drawBubbles();
     drawTextPopup(frightenedScorePopup);
     drawTextPopup(fruitAward, '#ffb8ff');
