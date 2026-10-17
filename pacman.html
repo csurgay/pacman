@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Pac-Man First Level Clone</title>
   <style>
     html, body {
@@ -15,18 +15,77 @@
     }
     body {
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
+      gap: 8px;
+      -webkit-user-select: none;
+      user-select: none;
     }
     canvas {
       background: #000;
-      image-rendering: pixelated;
       box-shadow: 0 0 0 2px #111, 0 0 40px rgba(40, 80, 255, 0.18);
+      touch-action: none;
     }
+    /* on-screen controls for touch screens */
+    .touch {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    .touch[hidden] { display: none; }
+    .touch button {
+      font: bold 13px/1 "Courier New", monospace;
+      color: #fff;
+      background: #0b0b2a;
+      border: 2px solid #2121ff;
+      border-radius: 8px;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .touch button.on { background: #2121ff; }
+    .dpad {
+      display: grid;
+      grid-template-columns: repeat(3, 40px);
+      grid-template-rows: repeat(3, 34px);
+      gap: 3px;
+    }
+    .dpad button { font-size: 15px; }
+    .dpad [data-key="ArrowUp"]    { grid-column: 2; grid-row: 1; }
+    .dpad [data-key="ArrowLeft"]  { grid-column: 1; grid-row: 2; }
+    .dpad [data-key="ArrowRight"] { grid-column: 3; grid-row: 2; }
+    .dpad [data-key="ArrowDown"]  { grid-column: 2; grid-row: 3; }
+    .keys {
+      display: grid;
+      grid-template-columns: repeat(4, 40px);
+      grid-auto-rows: 34px;
+      gap: 3px;
+    }
+    .keys [data-key="0"] { color: #ffb852; }
   </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+<div class="touch" id="touch" hidden>
+  <div class="dpad">
+    <button data-key="ArrowUp" aria-label="up">&#9650;</button>
+    <button data-key="ArrowLeft" aria-label="left">&#9664;</button>
+    <button data-key="ArrowRight" aria-label="right">&#9654;</button>
+    <button data-key="ArrowDown" aria-label="down">&#9660;</button>
+  </div>
+  <div class="keys">
+    <button data-key="0" aria-label="manual mode">0</button>
+    <button data-key="1" aria-label="ghost 1">1</button>
+    <button data-key="2" aria-label="ghost 2">2</button>
+    <button data-key="Tab" aria-label="state bubbles">TAB</button>
+    <button data-key="3" aria-label="ghost 3">3</button>
+    <button data-key="4" aria-label="ghost 4">4</button>
+    <button data-key="r" aria-label="restart">R</button>
+    <button data-key="t" aria-label="autotests">T</button>
+  </div>
+</div>
 <script>
 (() => {
   const TILE = 8;
@@ -38,35 +97,36 @@
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
   // The game logic runs in the original 224x288 coordinate space.
-  // RENDER_SCALE sets how many canvas pixels one game pixel gets: 1 = the arcade's own
-  // resolution (blocky), 2-3 = slightly smoothed lines like an emulator, higher = sharp vectors.
-  // The canvas is then stretched to the window without smoothing.
-  const RENDER_SCALE = 2;
-  const renderScale = RENDER_SCALE;
-  canvas.width = WIDTH * RENDER_SCALE;
-  canvas.height = HEIGHT * RENDER_SCALE;
-  // Text goes on a second, transparent canvas on top, at full screen resolution,
-  // so the letters stay sharp while the maze and the characters are a bit pixelated.
-  const textCanvas = document.createElement('canvas');
-  textCanvas.style.cssText = 'position:fixed;pointer-events:none;background:transparent;box-shadow:none;';
-  document.body.appendChild(textCanvas);
-  const tctx = textCanvas.getContext('2d');
-  let textScale = 1;
-  function resizeCanvas() {
-    const cssScale = Math.max(1, Math.min((window.innerWidth - 16) / WIDTH, (window.innerHeight - 16) / HEIGHT));
-    const dpr = window.devicePixelRatio || 1;
-    const cw = Math.round(WIDTH * cssScale), ch = Math.round(HEIGHT * cssScale);
-    canvas.style.width = cw + 'px';
-    canvas.style.height = ch + 'px';
-    textCanvas.style.width = cw + 'px';
-    textCanvas.style.height = ch + 'px';
-    textCanvas.width = Math.round(cw * dpr);
-    textCanvas.height = Math.round(ch * dpr);
-    textScale = textCanvas.width / WIDTH;
-    const r = canvas.getBoundingClientRect();
-    textCanvas.style.left = r.left + 'px';
-    textCanvas.style.top = r.top + 'px';
+  // RENDER_SCALE = 0: the canvas matches the screen's own resolution, everything is drawn sharp.
+  // RENDER_SCALE = 1, 2, 3: the picture is drawn that many times the arcade resolution and
+  // stretched to the window without smoothing (pixelated, more retro).
+  const RENDER_SCALE = 0;
+  let renderScale = 1;
+  if (RENDER_SCALE > 0) canvas.style.imageRendering = 'pixelated';
+  const touchEl = document.getElementById('touch');
+  // on-screen controls: shown on touch screens (or with ?touch in the address)
+  let touchUI = window.matchMedia('(pointer: coarse)').matches || /[?&]touch\b/.test(location.search);
+  function setTouchUI(on) {
+    touchUI = on;
+    touchEl.hidden = !on;
+    resizeCanvas();
   }
+  function resizeCanvas() {
+    const reserved = touchUI ? touchEl.offsetHeight + 8 : 0;
+    const cssScale = Math.max(0.5, Math.min((window.innerWidth - 16) / WIDTH, (window.innerHeight - 16 - reserved) / HEIGHT));
+    const dpr = window.devicePixelRatio || 1;
+    canvas.style.width = Math.round(WIDTH * cssScale) + 'px';
+    canvas.style.height = Math.round(HEIGHT * cssScale) + 'px';
+    if (RENDER_SCALE > 0) {
+      canvas.width = WIDTH * RENDER_SCALE;
+      canvas.height = HEIGHT * RENDER_SCALE;
+    } else {
+      canvas.width = Math.round(WIDTH * cssScale * dpr);
+      canvas.height = Math.round(HEIGHT * cssScale * dpr);
+    }
+    renderScale = canvas.width / WIDTH;
+  }
+  touchEl.hidden = !touchUI;
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
 
@@ -158,7 +218,7 @@
   // =====================================================================
   const CONFIG_FILES = { speeds: 'pacman-speeds.yaml', fsm: 'ghost-fsm.yaml' };
   const BUILTIN_SPEEDS_YAML = "# Pac-Man speed table\n#\n# The game reads this file when it starts and again on every restart (R key),\n# so edits take effect without reloading the page.\n#\n# All speeds are percentages. 100 % equals `px_per_frame_at_100` pixels per frame\n# at 60 frames per second. The arcade's 100 % is 75.758 px/s = 1.2626 px/frame.\n#\n# `active` selects the profile the game uses.\n\nactive: current\n\nprofiles:\n\n  # The speeds this clone has used so far (ghost / Pac-Man = 93 %, everything ~19 % slower than the arcade).\n  current:\n    px_per_frame_at_100: 1.0\n    pacman:\n      normal: 82                 # 0.82 px/frame\n      frightened: 92             # while the ghosts are blue\n      dot_pause_frames: 1        # Pac-Man stops for 1 frame on every dot\n      energizer_pause_frames: 3  # and for 3 frames on an energizer\n    ghost:\n      normal: 76\n      tunnel: 51.7               # inside the side tunnels\n      frightened: 46\n      frightened_tunnel: 34\n      eyes: 145                  # DEAD: eyes running back to the house\n      house: 50                  # bobbing in the house and walking out\n    blinky:\n      normal: 79\n      elroy1: { dots_left: 20, speed: 84 }   # \"Cruise Elroy\": Blinky speeds up near the end of the level\n      elroy2: { dots_left: 10, speed: 90 }\n\n  # The original arcade, level 1 (the commonly documented table).\n  arcade_level1:\n    px_per_frame_at_100: 1.2626\n    pacman:\n      normal: 80\n      frightened: 90\n      dot_pause_frames: 1\n      energizer_pause_frames: 3\n    ghost:\n      normal: 75\n      tunnel: 40\n      frightened: 50\n      frightened_tunnel: 40      # the tunnel limit applies to blue ghosts too\n      eyes: 150                  # not in the published table; estimate\n      house: 40                  # not in the published table; estimate\n    blinky:\n      normal: 75                 # same as the others until Elroy kicks in\n      elroy1: { dots_left: 20, speed: 80 }\n      elroy2: { dots_left: 10, speed: 85 }\n";
-  const BUILTIN_FSM_YAML = "# Ghost state machine (FSM)\n#\n# The game reads this file when it starts and again on every restart (R key).\n#\n#   HOME     waiting in the ghost house, or walking out of it\n#   SCATTER  heading for its own corner\n#   CHASE    hunting Pac-Man, each ghost with its own targeting rule\n#   EVADE    frightened (blue), turns at random, can be eaten\n#   DEAD     eyes running back to the house\n\nstates:\n  HOME:    { color: \"#9aa0b8\", speed: house,      target: none }\n  SCATTER: { color: \"#7ddc4c\", speed: normal,     target: scatter_corner }\n  CHASE:   { color: \"#ff5050\", speed: normal,     target: chase }\n  EVADE:   { color: \"#4f7bff\", speed: frightened, target: random }\n  DEAD:    { color: \"#ffffff\", speed: eyes,       target: house_door }\n\n# Global scatter/chase timer (level 1). In transitions, `to: mode` means\n# whichever of SCATTER / CHASE this timer is in right now.\n# The timer pauses while the ghosts are frightened.\nmode_schedule:\n  - { mode: SCATTER, seconds: 7 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 7 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 5 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 5 }\n  - { mode: CHASE,   seconds: forever }\n\n# How long the ghosts stay blue after Pac-Man eats an energizer.\nfright_seconds: 6\n\n# Per ghost: starting state, how many eaten dots release it from the house,\n# and its scatter corner (tile x, tile y; may lie outside the maze).\nghosts:\n  blinky: { start: SCATTER, release_dots: 0,  scatter_corner: [25, 0] }\n  pinky:  { start: HOME,    release_dots: 0,  scatter_corner: [2, 0] }\n  inky:   { start: HOME,    release_dots: 12, scatter_corner: [27, 35] }\n  clyde:  { start: HOME,    release_dots: 32, scatter_corner: [0, 35] }\n\n# Events raised by the game:\n#   released      the dot counter lets the ghost out of the house\n#   mode_change   the scatter/chase timer switches\n#   energizer     Pac-Man eats an energizer\n#   fright_end    the blue time is over\n#   touch         Pac-Man and the ghost are on the same spot\n#   arrived_home  DEAD eyes reached their place in the house\n#\n# Options:\n#   reverse: true      the ghost turns around\n#   frightened: true   blue look without changing state (ghosts waiting at home)\n#   action:            score_ghost (Pac-Man eats it) / kill_pacman (Pac-Man loses a life)\n# The first matching line wins. Events with no matching line are ignored.\ntransitions:\n  - { event: released,     from: HOME,             to: mode }\n  - { event: mode_change,  from: [SCATTER, CHASE], to: mode,  reverse: true }\n  - { event: energizer,    from: [SCATTER, CHASE], to: EVADE, reverse: true }\n  - { event: energizer,    from: HOME,             to: HOME,  frightened: true }\n  - { event: fright_end,   from: EVADE,            to: mode }\n  - { event: fright_end,   from: HOME,             to: HOME,  frightened: false }\n  - { event: touch,        from: EVADE,            to: DEAD,  action: score_ghost }\n  - { event: touch,        from: [SCATTER, CHASE], action: kill_pacman }\n  - { event: arrived_home, from: DEAD,             to: HOME }\n\n# Manual mode (key 0): keys 1-4 move ghost 1-4 to the next state in this list.\nmanual_cycle: [HOME, SCATTER, CHASE, EVADE, DEAD]\n";
+  const BUILTIN_FSM_YAML = "# Ghost state machine (FSM)\n#\n# The game reads this file when it starts and again on every restart (R key).\n#\n#   HOME     waiting in the ghost house, or walking out of it\n#   SCATTER  heading for its own corner\n#   CHASE    hunting Pac-Man, each ghost with its own targeting rule\n#   EVADE    frightened (blue), turns at random, can be eaten\n#   DEAD     eyes running back to the house\n\nstates:\n  HOME:    { color: \"#9aa0b8\", speed: house,      target: none }\n  SCATTER: { color: \"#7ddc4c\", speed: normal,     target: scatter_corner }\n  CHASE:   { color: \"#ff5050\", speed: normal,     target: chase }\n  EVADE:   { color: \"#4f7bff\", speed: frightened, target: random }\n  DEAD:    { color: \"#ffffff\", speed: eyes,       target: house_door }\n\n# Global scatter/chase timer (level 1). In transitions, `to: mode` means\n# whichever of SCATTER / CHASE this timer is in right now.\n# The timer pauses while the ghosts are frightened.\nmode_schedule:\n  - { mode: SCATTER, seconds: 7 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 7 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 5 }\n  - { mode: CHASE,   seconds: 20 }\n  - { mode: SCATTER, seconds: 5 }\n  - { mode: CHASE,   seconds: forever }\n\n# How long the ghosts stay blue after Pac-Man eats an energizer.\nfright_seconds: 6\n\n# Per ghost:\n#   start           starting state (HOME = in the ghost house)\n#   release_dots    how many eaten dots let it out of the house\n#   scatter_corner  its corner in SCATTER (tile x, tile y; may lie outside the maze)\n#   chase           how it aims at Pac-Man in CHASE:\n#     rule: pacman   Pac-Man's own tile\n#     rule: ahead    `tiles` tiles in front of Pac-Man\n#     rule: vector   take the point `tiles` in front of Pac-Man, then double the\n#                    vector from the `partner` ghost to that point\n#     rule: shy      Pac-Man's tile while farther than `radius` tiles, else its scatter corner\n#     up_quirk: true copies the arcade bug: when Pac-Man faces up, the \"in front of\"\n#                    point is also shifted the same number of tiles to the left\nghosts:\n  blinky:\n    start: SCATTER\n    release_dots: 0\n    scatter_corner: [25, 0]\n    chase: { rule: pacman }\n  pinky:\n    start: HOME\n    release_dots: 0\n    scatter_corner: [2, 0]\n    chase: { rule: ahead, tiles: 4, up_quirk: true }\n  inky:\n    start: HOME\n    release_dots: 12\n    scatter_corner: [27, 35]\n    chase: { rule: vector, tiles: 2, partner: blinky, up_quirk: true }\n  clyde:\n    start: HOME\n    release_dots: 32\n    scatter_corner: [0, 35]\n    chase: { rule: shy, radius: 8 }\n\n# Events raised by the game:\n#   released      the dot counter lets the ghost out of the house\n#   mode_change   the scatter/chase timer switches\n#   energizer     Pac-Man eats an energizer\n#   fright_end    the blue time is over\n#   touch         Pac-Man and the ghost are on the same spot\n#   arrived_home  DEAD eyes reached their place in the house\n#\n# Options:\n#   reverse: true      the ghost turns around\n#   frightened: true   blue look without changing state (ghosts waiting at home)\n#   action:            score_ghost (Pac-Man eats it) / kill_pacman (Pac-Man loses a life)\n# The first matching line wins. Events with no matching line are ignored.\ntransitions:\n  - { event: released,     from: HOME,             to: mode }\n  - { event: mode_change,  from: [SCATTER, CHASE], to: mode,  reverse: true }\n  - { event: energizer,    from: [SCATTER, CHASE], to: EVADE, reverse: true }\n  - { event: energizer,    from: HOME,             to: HOME,  frightened: true }\n  - { event: fright_end,   from: EVADE,            to: mode }\n  - { event: fright_end,   from: HOME,             to: HOME,  frightened: false }\n  - { event: touch,        from: EVADE,            to: DEAD,  action: score_ghost }\n  - { event: touch,        from: [SCATTER, CHASE], action: kill_pacman }\n  - { event: arrived_home, from: DEAD,             to: HOME }\n\n# Manual mode (key 0): keys 1-4 move ghost 1-4 to the next state in this list.\nmanual_cycle: [HOME, SCATTER, CHASE, EVADE, DEAD]\n";
   let CFG = null;              // { profileName, sp, unit, fsm }
   let configSource = '';       // 'yaml' or 'built-in'
 
@@ -285,7 +345,15 @@
     for (const k of ['normal', 'tunnel', 'frightened', 'frightened_tunnel', 'eyes', 'house']) if (typeof sp.ghost[k] !== 'number') fail('pacman-speeds.yaml: ghost.' + k + ' must be a number');
     if (!fsmDoc || !fsmDoc.states || !fsmDoc.transitions || !fsmDoc.mode_schedule || !fsmDoc.ghosts) fail('ghost-fsm.yaml: states / transitions / mode_schedule / ghosts missing');
     for (const s of ['HOME', 'SCATTER', 'CHASE', 'EVADE', 'DEAD']) if (!fsmDoc.states[s]) fail('ghost-fsm.yaml: state ' + s + ' missing');
-    for (const n of ['blinky', 'pinky', 'inky', 'clyde']) if (!fsmDoc.ghosts[n]) fail('ghost-fsm.yaml: ghost ' + n + ' missing');
+    for (const n of ['blinky', 'pinky', 'inky', 'clyde']) {
+      const gd = fsmDoc.ghosts[n];
+      if (!gd) fail('ghost-fsm.yaml: ghost ' + n + ' missing');
+      const c = gd.chase;
+      if (!c || !['pacman', 'ahead', 'vector', 'shy'].includes(c.rule)) fail('ghost-fsm.yaml: ' + n + '.chase.rule must be pacman, ahead, vector or shy');
+      if ((c.rule === 'ahead' || c.rule === 'vector') && typeof c.tiles !== 'number') fail('ghost-fsm.yaml: ' + n + '.chase.tiles must be a number');
+      if (c.rule === 'vector' && !['blinky', 'pinky', 'inky', 'clyde'].includes(c.partner)) fail('ghost-fsm.yaml: ' + n + '.chase.partner must name a ghost');
+      if (c.rule === 'shy' && typeof c.radius !== 'number') fail('ghost-fsm.yaml: ' + n + '.chase.radius must be a number');
+    }
     for (const tr of fsmDoc.transitions) {
       const froms = Array.isArray(tr.from) ? tr.from : [tr.from];
       for (const f of froms) if (!fsmDoc.states[f]) fail('ghost-fsm.yaml: unknown state "' + f + '" in transition ' + tr.event);
@@ -758,43 +826,36 @@
     if (kind === 'none' || kind === 'random') return null;
     if (kind === 'scatter_corner') return SCATTER_TARGET[g.name];
 
+    return chaseTarget(g);
+  }
+
+  // CHASE target from ghost-fsm.yaml: ghosts.<name>.chase
+  function chaseTarget(g) {
     const pt = tileOf(pacman);
-
-    if (g.name === 'blinky') return { x: pt.tx, y: pt.ty };
-
-    if (g.name === 'pinky') {
-      let x = pt.tx;
-      let y = pt.ty;
-      if (pacman.dir === DIR.up) {
-        x -= 4;
-        y -= 4;
-      } else {
-        x += pacman.dir.x * 4;
-        y += pacman.dir.y * 4;
-      }
+    const c = CFG.fsm.ghosts[g.name].chase;
+    // the point `n` tiles in front of Pac-Man (with the arcade's "up" bug if asked)
+    const ahead = (n) => {
+      let x = pt.tx + pacman.dir.x * n, y = pt.ty + pacman.dir.y * n;
+      if (c.up_quirk && pacman.dir === DIR.up) x -= n;
       return { x, y };
-    }
-
-    if (g.name === 'inky') {
-      const bt = tileOf(ghosts[0]);
-      let px = pt.tx;
-      let py = pt.ty;
-      if (pacman.dir === DIR.up) {
-        px -= 2;
-        py -= 2;
-      } else {
-        px += pacman.dir.x * 2;
-        py += pacman.dir.y * 2;
+    };
+    switch (c.rule) {
+      case 'pacman':
+        return { x: pt.tx, y: pt.ty };
+      case 'ahead':
+        return ahead(c.tiles);
+      case 'vector': {
+        const p = ahead(c.tiles);
+        const partner = ghosts.find(o => o.name === c.partner) || g;
+        const bt = tileOf(partner);
+        return { x: p.x + (p.x - bt.tx), y: p.y + (p.y - bt.ty) };
       }
-      return { x: px + (px - bt.tx), y: py + (py - bt.ty) };
+      case 'shy': {
+        const gt = tileOf(g);
+        if (distSq(gt.tx, gt.ty, pt.tx, pt.ty) >= c.radius * c.radius) return { x: pt.tx, y: pt.ty };
+        return SCATTER_TARGET[g.name];
+      }
     }
-
-    if (g.name === 'clyde') {
-      const gt = tileOf(g);
-      if (distSq(gt.tx, gt.ty, pt.tx, pt.ty) >= 64) return { x: pt.tx, y: pt.ty };
-      return SCATTER_TARGET.clyde;
-    }
-
     return { x: pt.tx, y: pt.ty };
   }
 
@@ -1159,10 +1220,10 @@
     str = String(str).toUpperCase();
     const px = size / 8;
     // row height snapped to whole canvas pixels so the lines stay crisp
-    const rowH = Math.max(1, Math.round(px * textScale * TEXT_SCANLINE)) / textScale;
+    const rowH = Math.max(1, Math.round(px * renderScale * TEXT_SCANLINE)) / renderScale;
     const w = str.length * size;
     let x0 = align === 'center' ? x - w / 2 : align === 'right' ? x - w : x;
-    tctx.fillStyle = color;
+    ctx.fillStyle = color;
     for (let i = 0; i < str.length; i++) {
       const g = GLYPHS[str[i]] || GLYPHS['?'];
       for (let r = 0; r < 7; r++) {
@@ -1171,7 +1232,7 @@
         while (c < 7) {
           if (row[c] !== '#') { c++; continue; }
           let e = c; while (e < 7 && row[e] === '#') e++;
-          tctx.fillRect(x0 + i * size + c * px, y + r * px, (e - c) * px + 0.02, TEXT_SCANLINE >= 1 ? px + 0.02 : rowH);
+          ctx.fillRect(x0 + i * size + c * px, y + r * px, (e - c) * px + 0.02, TEXT_SCANLINE >= 1 ? px + 0.02 : rowH);
           c = e;
         }
       }
@@ -1570,7 +1631,14 @@
     const chase = () => { globalMode = 'chase'; };
     test('Blinky targets Pac-Man', () => { fresh(); chase(); placePac(6, 7, DIR.left); const tg = ghostTarget(G('blinky')); eq(tg.x, 6); eq(tg.y, 7); });
     test('Pinky: 4 tiles ahead', () => { fresh(); chase(); placePac(10, 7, DIR.left); const g = G('pinky'); g.inHouse = false; const tg = ghostTarget(g); eq(tg.x, 6); eq(tg.y, 7); });
-    test('Pinky: arcade "up" quirk', () => { fresh(); chase(); placePac(10, 20, DIR.up); const g = G('pinky'); g.inHouse = false; const tg = ghostTarget(g); eq(tg.x, 6); eq(tg.y, 16); });
+    test('Pinky: arcade "up" quirk', () => {
+      fresh(); chase(); placePac(10, 20, DIR.up); const g = G('pinky'); g.inHouse = false;
+      const c = CFG.fsm.ghosts.pinky.chase, keep = c.up_quirk;
+      try {
+        c.up_quirk = true;  let tg = ghostTarget(g); eq(tg.x + ',' + tg.y, '6,16', 'quirk on');
+        c.up_quirk = false; tg = ghostTarget(g); eq(tg.x + ',' + tg.y, '10,16', 'quirk off');
+      } finally { c.up_quirk = keep; }
+    });
     test('Inky: doubled vector', () => {
       fresh(); chase(); placePac(10, 7, DIR.right); placeGhost(G('blinky'), 6, 3, DIR.left);
       const g = G('inky'); g.inHouse = false; const tg = ghostTarget(g); eq(tg.x, 18); eq(tg.y, 11);
@@ -1732,6 +1800,76 @@
       } finally { CFG.fsm.transitions = saved; }
     });
 
+    // ---------- touch controls ----------
+    const press = (key) => {
+      const b = touchEl.querySelector('button[data-key="' + key + '"]');
+      if (!b) throw new Error('no button ' + key);
+      b.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+      b.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+    };
+    test('Touch controls show on mobile', () => {
+      const was = touchUI;
+      try {
+        setTouchUI(true);
+        ok(!touchEl.hidden, 'hidden'); ok(touchEl.offsetHeight > 50, 'no height');
+        const c = canvas.getBoundingClientRect(), k = touchEl.getBoundingClientRect();
+        ok(k.top >= c.bottom - 1, 'controls overlap the game');
+        ok(k.bottom <= window.innerHeight + 1, 'controls off screen');
+        setTouchUI(false); ok(touchEl.hidden, 'not hidden on desktop');
+      } finally { setTouchUI(was); }
+    });
+    test('Touch: 10 buttons present', () => {
+      for (const k of ['ArrowUp', 'ArrowLeft', 'ArrowRight', 'ArrowDown', '0', '1', '2', '3', '4', 'Tab'])
+        ok(touchEl.querySelector('button[data-key="' + k + '"]'), 'missing ' + k);
+    });
+    test('Touch d-pad steers Pac-Man', () => {
+      fresh();
+      for (const [k, d] of [['ArrowUp', DIR.up], ['ArrowRight', DIR.right], ['ArrowDown', DIR.down], ['ArrowLeft', DIR.left]]) {
+        press(k); eq(input.desired, d, k);
+      }
+      placePac(3, 7, DIR.left); press('ArrowRight'); sim(20); ok(pacman.x > pixelCenter(3, 7).x, 'did not move right');
+    });
+    test('Touch 0 toggles manual mode', () => {
+      fresh();
+      try { press('0'); ok(manualMode, 'not on'); ok(ghosts.every(g => ghostLabel(g) === 'HOME'), 'not home'); press('0'); ok(!manualMode, 'not off'); }
+      finally { manualMode = false; }
+    });
+    test('Touch 1-4 step each ghost', () => {
+      fresh();
+      try {
+        press('0');
+        for (let i = 0; i < 4; i++) {
+          press(String(i + 1));
+          ok(ghosts[i].released, ghosts[i].name + ' not released');
+          let f = 0; while (ghosts[i].inHouse && f++ < 600) step(FRAME);
+          eq(ghostLabel(ghosts[i]), 'SCATTER', ghosts[i].name);
+        }
+      } finally { manualMode = false; }
+    });
+    test('Touch 1-4 do nothing in rules mode', () => {
+      fresh(); const before = ghosts.map(ghostLabel).join();
+      for (const k of ['1', '2', '3', '4']) press(k);
+      eq(ghosts.map(ghostLabel).join(), before);
+    });
+    test('Touch TAB toggles state bubbles', () => {
+      const was = showBubbles;
+      try { showBubbles = false; press('Tab'); ok(showBubbles, 'not on'); press('Tab'); ok(!showBubbles, 'not off'); }
+      finally { showBubbles = was; }
+    });
+    test('Swipe on the screen steers', () => {
+      fresh(); const r = canvas.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const swipeTo = (dx, dy) => {
+        canvas.dispatchEvent(new PointerEvent('pointerdown', { clientX: cx, clientY: cy, bubbles: true }));
+        canvas.dispatchEvent(new PointerEvent('pointermove', { clientX: cx + dx, clientY: cy + dy, bubbles: true }));
+        canvas.dispatchEvent(new PointerEvent('pointerup', { clientX: cx + dx, clientY: cy + dy, bubbles: true }));
+      };
+      swipeTo(0, -40); eq(input.desired, DIR.up, 'up');
+      swipeTo(40, 0); eq(input.desired, DIR.right, 'right');
+      swipeTo(0, 40); eq(input.desired, DIR.down, 'down');
+      swipeTo(-40, 0); eq(input.desired, DIR.left, 'left');
+      input.desired = DIR.up; swipeTo(5, 4); eq(input.desired, DIR.up, 'tiny move should not steer');
+    });
+
     // ---------- manual mode ----------
     test('Manual: all ghosts HOME, frozen', () => {
       fresh(); sim(120); toggleManual();
@@ -1782,7 +1920,7 @@
     const half = Math.ceil(results.length / 2);
     results.forEach((r, i) => {
       const col = i < half ? 0 : 1, row = i < half ? i : i - half;
-      const x = 6 + col * 110, y = 22 + row * 9.4;
+      const x = 6 + col * 110, y = 22 + row * Math.min(9.4, 236 / half);
       ctx.fillStyle = r.pass ? '#7ddc4c' : '#ff5050';
       ctx.fillText((r.pass ? 'OK  ' : 'FAIL ') + String(r.n).padStart(2, '0'), x, y);
       ctx.fillStyle = '#e8e8f0';
@@ -1796,9 +1934,6 @@
   }
 
   function draw() {
-    tctx.setTransform(1, 0, 0, 1, 0, 0);
-    tctx.clearRect(0, 0, textCanvas.width, textCanvas.height);
-    tctx.setTransform(textScale, 0, 0, textScale, 0, 0);
     ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, WIDTH, HEIGHT);
@@ -1810,11 +1945,6 @@
     drawTextPopup(frightenedScorePopup);
     drawTextPopup(fruitAward, '#ffb8ff');
     drawUI();
-    if (testReport) {
-      tctx.setTransform(1, 0, 0, 1, 0, 0);
-      tctx.clearRect(0, 0, textCanvas.width, textCanvas.height);
-      tctx.setTransform(textScale, 0, 0, textScale, 0, 0);
-    }
     drawTestReport();
   }
 
@@ -1845,21 +1975,54 @@
     requestAnimationFrame(loop);
   }
 
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowLeft') input.desired = DIR.left;
-    else if (e.key === 'ArrowRight') input.desired = DIR.right;
-    else if (e.key === 'ArrowUp') input.desired = DIR.up;
-    else if (e.key === 'ArrowDown') input.desired = DIR.down;
-    else if (e.key === 'r' || e.key === 'R') loadConfig().then(startGame);
-    else if (e.key === 't' || e.key === 'T') {
+  // Keyboard keys and the on-screen buttons all end up here.
+  function handleKey(key) {
+    if (key === 'ArrowLeft') input.desired = DIR.left;
+    else if (key === 'ArrowRight') input.desired = DIR.right;
+    else if (key === 'ArrowUp') input.desired = DIR.up;
+    else if (key === 'ArrowDown') input.desired = DIR.down;
+    else if (key === 'r' || key === 'R') loadConfig().then(startGame);
+    else if (key === 't' || key === 'T') {
       if (testReport) { testReport = null; startGame(); }
       else testReport = runAutotests();
     }
     else if (testReport) return;
-    else if (e.key === '0') toggleManual();
-    else if (e.key === 'Tab') { e.preventDefault(); showBubbles = !showBubbles; }
-    else if (manualMode && e.key >= '1' && e.key <= '4') stepGhostState(Number(e.key) - 1);
+    else if (key === '0') toggleManual();
+    else if (key === 'Tab') showBubbles = !showBubbles;
+    else if (manualMode && key >= '1' && key <= '4') stepGhostState(Number(key) - 1);
+  }
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab' || e.key.startsWith('Arrow')) e.preventDefault();
+    handleKey(e.key);
   });
+
+  // on-screen buttons
+  for (const b of touchEl.querySelectorAll('button')) {
+    b.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      b.classList.add('on');
+      handleKey(b.dataset.key);
+    });
+    const off = () => b.classList.remove('on');
+    b.addEventListener('pointerup', off);
+    b.addEventListener('pointercancel', off);
+    b.addEventListener('pointerleave', off);
+  }
+
+  // swipe on the game screen to steer
+  let swipe = null;
+  const SWIPE_MIN = 18;   // CSS pixels
+  canvas.addEventListener('pointerdown', (e) => { swipe = { x: e.clientX, y: e.clientY }; });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!swipe) return;
+    const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_MIN) return;
+    handleKey(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'ArrowRight' : 'ArrowLeft') : (dy > 0 ? 'ArrowDown' : 'ArrowUp'));
+    swipe = { x: e.clientX, y: e.clientY };
+  });
+  const endSwipe = () => { swipe = null; };
+  canvas.addEventListener('pointerup', endSwipe);
+  canvas.addEventListener('pointercancel', endSwipe);
 
   loadConfig().then(() => {
     startGame();

@@ -31,13 +31,39 @@ mode_schedule:
 # How long the ghosts stay blue after Pac-Man eats an energizer.
 fright_seconds: 6
 
-# Per ghost: starting state, how many eaten dots release it from the house,
-# and its scatter corner (tile x, tile y; may lie outside the maze).
+# Per ghost:
+#   start           starting state (HOME = in the ghost house)
+#   release_dots    how many eaten dots let it out of the house
+#   scatter_corner  its corner in SCATTER (tile x, tile y; may lie outside the maze)
+#   chase           how it aims at Pac-Man in CHASE:
+#     rule: pacman   Pac-Man's own tile
+#     rule: ahead    `tiles` tiles in front of Pac-Man
+#     rule: vector   take the point `tiles` in front of Pac-Man, then double the
+#                    vector from the `partner` ghost to that point
+#     rule: shy      Pac-Man's tile while farther than `radius` tiles, else its scatter corner
+#     up_quirk: true copies the arcade bug: when Pac-Man faces up, the "in front of"
+#                    point is also shifted the same number of tiles to the left
 ghosts:
-  blinky: { start: SCATTER, release_dots: 0,  scatter_corner: [25, 0] }
-  pinky:  { start: HOME,    release_dots: 0,  scatter_corner: [2, 0] }
-  inky:   { start: HOME,    release_dots: 12, scatter_corner: [27, 35] }
-  clyde:  { start: HOME,    release_dots: 32, scatter_corner: [0, 35] }
+  blinky:
+    start: SCATTER
+    release_dots: 0
+    scatter_corner: [25, 0]
+    chase: { rule: pacman }
+  pinky:
+    start: HOME
+    release_dots: 0
+    scatter_corner: [2, 0]
+    chase: { rule: ahead, tiles: 4, up_quirk: true }
+  inky:
+    start: HOME
+    release_dots: 12
+    scatter_corner: [27, 35]
+    chase: { rule: vector, tiles: 2, partner: blinky, up_quirk: true }
+  clyde:
+    start: HOME
+    release_dots: 32
+    scatter_corner: [0, 35]
+    chase: { rule: shy, radius: 8 }
 
 # Events raised by the game:
 #   released      the dot counter lets the ghost out of the house
