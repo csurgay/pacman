@@ -590,7 +590,6 @@
   let levelClearTimer = 0;
   let flashTimer = 0;
   let cutscene = null;        // intermission after a level: { t, half }
-  let eatenFruits = [];       // fruit kinds Pac-Man has eaten, oldest first (shown bottom right)
   let fruit = null;
   let fruitAward = null;
   let fruitSpawned7 = false;
@@ -777,7 +776,7 @@
 
   function resetPacman() {
     const p = pixelCenter(13, 25);
-    pacman.x = p.x;
+    pacman.x = 14 * TILE;      // exactly the middle of the screen, between tiles 13 and 14 (arcade)
     pacman.y = p.y;
     pacman.dir = DIR.left;
     pacman.mouthPhase = 0;
@@ -811,7 +810,6 @@
     score = 0;
     lives = 3;
     level = 1;
-    eatenFruits = [];
     gameOver = false;
     copyMaze();
     recountPellets();
@@ -866,7 +864,7 @@
 
   function spawnFruit() {
     if (fruit) return;
-    const p = pixelCenter(13, 19);
+    const p = { x: 14 * TILE, y: pixelCenter(13, 19).y };   // centred, like Pac-Man's start
     fruit = { x: p.x, y: p.y, timer: 9, kind: fruitForLevel(level) };
   }
 
@@ -997,7 +995,7 @@
     }
 
     moveByDirection(pacman, pacmanSpeed());
-    pacman.mouthPhase += 0.22;
+    if (pacman.dir !== DIR.none) pacman.mouthPhase += 0.22;   // chews only while moving
   }
 
   // target by FSM state (ghost-fsm.yaml: states.X.target)
@@ -1172,6 +1170,7 @@
 
   function updateGhost(g) {
     if (readyTimer > 0 || deathTimer > 0 || levelClearTimer > 0 || cutscene || gameOver) return;
+    g.anim = (g.anim || 0) + 1;   // skirt animation (frames)
 
     if (g.state === 'frightened') {
       g.flash = !manualMode && frightenedTimer < 2 && Math.floor(frightenedTimer * 10) % 2 === 0;
@@ -1263,7 +1262,6 @@
         addScore(pts);
         fruitAward = { x: fruit.x, y: fruit.y, text: String(pts), timer: 1.1 };
         playSound('eat_fruit');
-        eatenFruits.push(fruit.kind);
         fruit = null;
       }
     }
@@ -1591,6 +1589,11 @@
     }
   }
 
+  // half-angle of the mouth: fully shut for a moment, then wide open (about 95 degrees)
+  function mouthAngle(phase) {
+    return Math.max(0, Math.abs(Math.sin(phase)) * 0.98 - 0.15);
+  }
+
   // Pac-Man shape: facing `dirName`, mouth half-angle `mouth` (radians), radius r
   function drawPacShape(x, y, dirName, mouth, r) {
     const angle = { right: 0, left: Math.PI, up: -Math.PI / 2, down: Math.PI / 2, none: Math.PI }[dirName];
@@ -1604,20 +1607,20 @@
 
   function drawCutscene() {
     const c = cutscene, y = 17 * TILE + 4;
-    const mouth = 0.16 + Math.abs(Math.sin(c.t * 14)) * 0.34;
+    const mouth = mouthAngle(c.t * 13);
     if (c.t < c.half) {
       // there: Pac-Man runs left, Blinky right behind him
       const k = c.t / c.half;
       const px = WIDTH + 12 - k * (WIDTH + 70);
       const gx = px + 26 - k * 8;
       at16(px, y, () => drawPacShape(px, y, 'left', mouth, 3.9));
-      at16(gx, y, () => drawGhost({ x: gx, y, dir: DIR.left, state: 'normal', color: '#ff2d2d', flash: false }));
+      at16(gx, y, () => drawGhost({ x: gx, y, dir: DIR.left, state: 'normal', color: '#ff2d2d', flash: false, anim: c.t * 60 }));
     } else {
       // and back: blue Blinky runs right, a giant Pac-Man after him
       const k = Math.min(1, (c.t - c.half) / c.half);
       const gx = -12 + k * (WIDTH + 62);
       const px = gx - 46 + k * 18;      // closes in, but never catches him
-      at16(gx, y, () => drawGhost({ x: gx, y, dir: DIR.right, state: 'frightened', color: '#ff2d2d', flash: false }));
+      at16(gx, y, () => drawGhost({ x: gx, y, dir: DIR.right, state: 'frightened', color: '#ff2d2d', flash: false, anim: c.t * 60 }));
       at16(px, y - 6, () => drawPacShape(px, y - 6, 'right', mouth, 3.9 * 2.6));
     }
   }
@@ -1645,11 +1648,20 @@
       return;
     }
 
-    const mouth = 0.16 + Math.abs(Math.sin(pacman.mouthPhase)) * 0.34;
+    const mouth = mouthAngle(pacman.mouthPhase);
     ctx.moveTo(pacman.x, pacman.y);
     ctx.arc(pacman.x, pacman.y, 3.9, angle + mouth, angle - mouth + Math.PI * 2);
     ctx.closePath();
     ctx.fill();
+  }
+
+  // the two skirt shapes (right to left), swapped every 8 frames like the arcade
+  const GHOST_SKIRT = [
+    [[4, 4], [2.6, 2.2], [1.1, 4], [-1.1, 2.2], [-2.6, 4], [-4, 2.2]],
+    [[4, 2.6], [3.2, 4], [2, 2.2], [0.7, 4], [-0.7, 4], [-2, 2.2], [-3.2, 4], [-4, 2.6]]
+  ];
+  function ghostSkirtFrame(g) {
+    return Math.floor((g.anim || 0) / 8) % 2;
   }
 
   function drawGhost(g) {
@@ -1660,12 +1672,7 @@
       ctx.fillStyle = color;
       ctx.beginPath();
       ctx.arc(g.x, g.y - 1, 4, Math.PI, 0);
-      ctx.lineTo(g.x + 4, g.y + 4);
-      ctx.lineTo(g.x + 2.6, g.y + 2.2);
-      ctx.lineTo(g.x + 1.1, g.y + 4);
-      ctx.lineTo(g.x - 1.1, g.y + 2.2);
-      ctx.lineTo(g.x - 2.6, g.y + 4);
-      ctx.lineTo(g.x - 4, g.y + 2.2);
+      for (const [dx, dy] of GHOST_SKIRT[ghostSkirtFrame(g)]) ctx.lineTo(g.x + dx, g.y + dy);
       ctx.closePath();
       ctx.fill();
     }
@@ -1715,11 +1722,12 @@
     ctx.save();
     switch (kind) {
       case 'cherry':
-        line([x - 1.8, y + 0.8, x + 0.4, y - 3.6, x + 2.6, y - 3.8], '#c87038', 0.8);
-        line([x + 1.6, y + 1.2, x + 0.4, y - 3.6], '#c87038', 0.8);
-        disc(x - 1.8, y + 1.4, 2.0, '#ff1a1a');
-        disc(x + 1.6, y + 1.9, 2.0, '#ff1a1a');
-        dot(x - 2.5, y + 0.8, '#fff'); dot(x + 0.9, y + 1.3, '#fff');
+        // two separate small cherries on long stems joined at the top right
+        line([x - 2.3, y + 0.6, x - 0.6, y - 2.2, x + 2.4, y - 3.8], '#c87038', 0.7);
+        line([x + 1.9, y + 1.4, x + 1.6, y - 1.2, x + 2.4, y - 3.8], '#c87038', 0.7);
+        disc(x - 2.3, y + 1.9, 1.75, '#ff1a1a');
+        disc(x + 1.9, y + 2.5, 1.75, '#ff1a1a');
+        dot(x - 2.9, y + 1.4, '#fff'); dot(x + 1.3, y + 2.0, '#fff');
         break;
       case 'strawberry':
         ctx.fillStyle = '#ff1a1a';
@@ -1798,12 +1806,17 @@
     ctx.restore();
   }
 
-  // bottom right: the fruits eaten so far, oldest at the right edge (max. 7, like the arcade)
-  function drawEatenFruits() {
-    const list = eatenFruits.slice(-7);
+  // bottom right: the fruits of the completed levels, oldest at the right edge (max. 7)
+  function levelFruits() {
+    const list = [];
+    for (let lv = Math.max(1, level - 7); lv < level; lv++) list.push(fruitForLevel(lv));
+    return list;
+  }
+  function drawLevelFruits() {
+    const list = levelFruits();
     for (let i = 0; i < list.length; i++) {
-      const x = WIDTH - 16 - i * 14, y = HEIGHT - 11;
-      at16(x, y, () => drawFruitIcon(list[i], x, y));
+      const x = WIDTH - 14 - i * 10, y = HEIGHT - 11;
+      drawFruitIcon(list[i], x, y);
     }
   }
 
@@ -1830,7 +1843,7 @@
       ctx.fill();
     }
 
-    drawEatenFruits();
+    drawLevelFruits();
     if (manualMode) arcadeText('MANUAL', WIDTH / 2, HEIGHT - 15, '#ffb852', 8, 'center');
     if (!soundOn) arcadeText('SOUND OFF', WIDTH / 2, 0, '#9aa0b8', 4.5, 'center');
     if (configSource === 'built-in') arcadeText('BUILT-IN CONFIG', WIDTH / 2, HEIGHT - 6, '#ff8c00', 4.5, 'center');
@@ -1916,7 +1929,7 @@
 
     // ---------- Pac-Man ----------
     test('Pac-Man starts and waits READY', () => {
-      startGame(); const t = tileOf(pacman); eq(t.tx, 13); eq(t.ty, 25); eq(pacman.dir, DIR.left);
+      startGame(); eq(pacman.x, WIDTH / 2, 'not in the middle'); eq(tileOf(pacman).ty, 25); eq(pacman.dir, DIR.left);
       const x = pacman.x; sim(30); eq(pacman.x, x, 'moved during READY');
     });
     test('Pac-Man moves after READY', () => { fresh(); const x = pacman.x; sim(30); ok(pacman.x < x - 10, 'did not move left'); });
@@ -2094,18 +2107,34 @@
       const saved = level;
       try { level = 2; eq(fruitScoreForLevel(), 300); level = 13; eq(fruitScoreForLevel(), 5000); } finally { level = saved; }
     });
-    test('Eaten fruit goes to the bottom-right row', () => {
-      fresh(); eq(eatenFruits.length, 0, 'new game'); level = 3; placePac(1, 7, DIR.right); spawnFruit(); eq(fruit.kind, 'orange');
-      const s = score; pacman.x = fruit.x; pacman.y = fruit.y; collide();
-      eq(score - s, 500); eq(eatenFruits.join(), 'orange');
-      placePac(1, 7, DIR.right); spawnFruit(); fruit.timer = 0.01; sim(2); eq(fruit, null, 'fruit did not expire'); eq(eatenFruits.length, 1, 'missed fruit counted');
+    test('The fruit in the middle is the level fruit', () => {
+      fresh(); placePac(1, 7, DIR.right); spawnFruit(); eq(fruit.kind, 'cherry'); eq(fruit.x, 14 * TILE, 'not centred');
+      fruit = null; level = 3; spawnFruit(); eq(fruit.kind, 'orange');
+      const s = score; pacman.x = fruit.x; pacman.y = fruit.y; collide(); eq(score - s, 500);
+    });
+    test('Bottom-right row: completed levels', () => {
+      fresh(); eq(levelFruits().length, 0, 'level 1');
+      level = 2; eq(levelFruits().join(), 'cherry');
+      level = 4; eq(levelFruits().join(), 'cherry,strawberry,orange');
     });
     test('Fruit row shows at most 7', () => {
-      fresh(); eatenFruits = ['cherry', 'strawberry', 'orange', 'orange', 'apple', 'apple', 'melon', 'melon', 'galaxian'];
+      fresh(); level = 12;
+      eq(levelFruits().join(), 'apple,apple,melon,melon,galaxian,galaxian,bell');
       let n = 0; const orig = drawFruitIcon;
       drawFruitIcon = () => { n++; };
-      try { drawEatenFruits(); } finally { drawFruitIcon = orig; }
+      try { drawLevelFruits(); } finally { drawFruitIcon = orig; }
       eq(n, 7);
+    });
+    test('Mouth shuts fully and opens wide', () => {
+      let min = 9, max = 0;
+      for (let ph = 0; ph < Math.PI; ph += 0.22) { const m = mouthAngle(ph); min = Math.min(min, m); max = Math.max(max, m); }
+      eq(min, 0, 'never fully shut'); ok(max > 0.75, 'opens only ' + max.toFixed(2));
+    });
+    test('Ghost skirt ripples while moving', () => {
+      fresh(); const g = G('blinky'); placeGhost(g, 6, 7, DIR.right);
+      const seen = new Set(); for (let i = 0; i < 20; i++) { sim(1); seen.add(ghostSkirtFrame(g)); }
+      eq(seen.size, 2, 'skirt did not change');
+      readyTimer = 5; const f = ghostSkirtFrame(g), a = g.anim; sim(20); eq(g.anim, a, 'animated while frozen'); eq(ghostSkirtFrame(g), f);
     });
     test('Intermission after every level', () => {
       fresh(); clearLevel(); ok(cutscene, 'no intermission after level 1');
@@ -2127,7 +2156,7 @@
       ok(Math.abs(f / 60 - 2 * h) < 0.1, 'took ' + (f / 60).toFixed(2) + ' s for 2 x ' + h.toFixed(2));
     });
     test('R during the intermission starts a clean game', () => {
-      fresh(); clearLevel(); ok(cutscene); startGame(); eq(cutscene, null); eq(level, 1); eq(eatenFruits.length, 0);
+      fresh(); clearLevel(); ok(cutscene); startGame(); eq(cutscene, null); eq(level, 1); eq(levelFruits().length, 0);
     });
 
     // ---------- configuration (YAML) ----------
